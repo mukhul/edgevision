@@ -1,0 +1,81 @@
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# Test, coverage and tooling caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------
+# Secrets and local configuration
+# ---------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+configs/local*.yaml
+
+# ---------------------------------------------------------------
+# Model weights and exported models (download or regenerate locally)
+# ---------------------------------------------------------------
+models/*
+!models/README.md
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+*.plan
+
+# ---------------------------------------------------------------
+# Data: local videos and datasets (never committed)
+# ---------------------------------------------------------------
+data/*
+!data/README.md
+!data/input/
+data/input/*
+!data/input/.gitkeep
+datasets/
+
+# Generated videos and images anywhere in the tree
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# ---------------------------------------------------------------
+# Benchmark outputs (raw results stay local; curated summaries go in docs/)
+# ---------------------------------------------------------------
+results/*
+!results/README.md
+runs/
+wandb/

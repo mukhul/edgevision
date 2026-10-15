@@ -1,0 +1,41 @@
+# EdgeVision default experiment configuration — DRAFT
+#
+# This file is not read by any code yet. It records the intended settings
+# and shape of the configuration; field names may change when config
+# parsing and validation are implemented.
+
+model:
+  name: yolov8n
+  weights: models/yolov8n.pt        # downloaded locally; not committed
+  onnx_path: models/yolov8n.onnx    # produced by the export step; not committed
+  input_size: 640                   # square model input, pixels
+  conf_threshold: 0.25
+  iou_threshold: 0.7                # NMS IoU threshold
+  classes: null                     # null = all classes; or a list of class IDs
+
+export:
+  opset: null                       # to be chosen and documented with the export step
+  dynamic_shapes: false
+  validate: true                    # compare ONNX outputs against PyTorch
+
+video:
+  input: data/input/sample.mp4
+  max_frames: 300                   # null = whole video
+
+tracking:
+  enabled: true
+  tracker: bytetrack
+
+output:
+  dir: results
+  overwrite: false                  # never silently replace earlier results
+
+benchmark:
+  backends: [pytorch, onnx_cpu]     # also planned: onnx_cuda (only if the CUDA EP is available)
+  device: auto                      # auto | cpu | cuda; a requested device is never silently changed
+  scopes: [model_only, end_to_end]
+  warmup: 20
+  frames: 300
+  runs: 3
+  batch_size: 1
+  precision: fp32
