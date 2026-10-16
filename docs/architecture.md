@@ -1,6 +1,6 @@
 # Architecture (planned)
 
-> **Status:** design document only. None of the components below are implemented yet.
+> **Status:** mostly a design document. Only **Configuration** (`config.py`) and the environment-report part of **Device detection** (`device.py`) are implemented. Device *selection* and every other component below are planned.
 
 ## Data flow
 

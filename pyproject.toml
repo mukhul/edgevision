@@ -4,39 +4,36 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edgevision"
-version = "0.1.0.dev0"
+dynamic = ["version"]   # read from edgevision.__version__ (single source of truth)
 description = "Video perception pipeline and reproducible PyTorch vs ONNX Runtime inference benchmarking (early development)."
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 
-# NOTE: Planned dependencies. Lower bounds only; they have NOT yet been
-# installed and tested together. Versions will be constrained once the
-# pipeline is implemented and verified.
+# Only what the implemented code needs. Heavy ML packages (PyTorch, ONNX
+# Runtime, OpenCV, Ultralytics) are deliberately NOT mandatory: the
+# environment report treats them as optional and they will be added, with
+# CPU and GPU variants kept separate, in the stages that actually use them.
 dependencies = [
-    "torch>=2.2",
-    "ultralytics>=8.1",
-    "opencv-python>=4.9",
-    "onnx>=1.15",
-    "numpy>=1.26",
-    "pandas>=2.0",
-    "matplotlib>=3.8",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.1,<7",
 ]
 
 [project.optional-dependencies]
-# ONNX Runtime is split into mutually exclusive extras: `onnxruntime` and
-# `onnxruntime-gpu` should not be installed in the same environment.
-cpu = ["onnxruntime>=1.17"]
-gpu = ["onnxruntime-gpu>=1.17"]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0,<10",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "edgevision.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-ra"   # summarise skipped/failed tests at the end of every run

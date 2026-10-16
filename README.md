@@ -5,8 +5,8 @@
 ![Backends](https://img.shields.io/badge/backends-PyTorch%20%7C%20ONNX%20Runtime-lightgrey)
 
 > [!IMPORTANT]
-> **This repository is an initial scaffold of an ongoing personal project.**
-> No detection, tracking, ONNX export, GPU execution, benchmarking, or tests are implemented yet, and **no benchmark results have been recorded**. Everything described below as *planned* is the design target, not existing functionality.
+> **This repository is in early development.**
+> Only the project foundation exists so far: an installable package, validated configuration loading, and an environment report. No detection, tracking, ONNX export, GPU execution, or benchmarking is implemented, and **no benchmark results have been recorded**. Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -20,6 +20,9 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 
 | Capability | Planned | Implemented | Benchmarked |
 |------------|:-------:|:-----------:|:-----------:|
+| Installable package (`pip install -e ".[dev]"`) | ✅ | ✅ | n/a |
+| Configuration loading and validation | ✅ | ✅ | n/a |
+| Hardware / software environment report | ✅ | ✅ | n/a |
 | Video input (OpenCV, prerecorded files) | ✅ | — | — |
 | Object detection — PyTorch backend | ✅ | — | — |
 | ONNX export and numerical validation | ✅ | — | — |
@@ -29,13 +32,19 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Annotated output video | ✅ | — | — |
 | Latency / throughput benchmark runner | ✅ | — | — |
 | Detection-quality evaluation (ground truth) | ✅ | — | — |
-| Automated test suite | ✅ | — | — |
+| Tests for the pipeline, backends, and benchmarks | ✅ | — | n/a |
 
 - **Planned** — described in the project specification; not yet built.
 - **Implemented** — exists in this repository and is covered by passing tests.
 - **Benchmarked** — measured, with results and configuration recorded in [`docs/experiment_log.md`](docs/experiment_log.md).
 
-**What exists today:** the repository layout, packaging metadata, a draft experiment configuration, a `.gitignore` that keeps weights/videos/results out of Git, and design documents for the architecture and benchmarking methodology.
+**What exists today:**
+
+- An installable `edgevision` package (src layout) whose only required dependency is PyYAML.
+- `edgevision.config`: loads `configs/default.yaml` (or any given file) into typed, immutable settings. Missing fields, wrong types, out-of-range values, unknown fields and duplicate keys are rejected, and every problem is listed with its location.
+- `edgevision.device`: reports Python, OS, CPU, NVIDIA GPU hardware (via `nvidia-smi`), optional packages, PyTorch CUDA support and ONNX Runtime execution providers. It works when PyTorch and ONNX Runtime are not installed, and keeps "a GPU is present" separate from "a framework can use it".
+- pytest tests for all of the above, which need no GPU, network, or ML packages.
+- A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
 ## Intended scope
 
@@ -98,17 +107,22 @@ Current contents:
 ```text
 edgevision/
 ├── README.md
-├── pyproject.toml           # package metadata and planned dependencies
+├── pyproject.toml           # package metadata, dependencies, pytest settings
 ├── .gitignore
 ├── configs/
-│   └── default.yaml         # draft experiment configuration (not yet consumed)
+│   └── default.yaml         # default experiment settings (single source of defaults)
 ├── src/
 │   └── edgevision/
-│       └── __init__.py      # package marker and version only
+│       ├── __init__.py      # package marker and version
+│       ├── config.py        # YAML loading and validation
+│       └── device.py        # environment / hardware report
 ├── scripts/
 │   └── README.md            # planned CLI entry points
 ├── tests/
-│   └── README.md            # planned test coverage
+│   ├── README.md            # how to run tests; planned coverage
+│   ├── test_config.py
+│   ├── test_device.py
+│   └── test_package.py
 ├── docs/
 │   ├── architecture.md      # planned components and data flow
 │   ├── benchmarking.md      # planned timing methodology
@@ -122,7 +136,7 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `config`, `device`, `models/` (backend interface, PyTorch backend, ONNX backend, export), `video/` (reader, writer), `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
+Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (backend interface, PyTorch backend, ONNX backend, export), `video/` (reader, writer), `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
 
 ## Planned benchmark methodology
 
@@ -139,25 +153,51 @@ Details: [`docs/benchmarking.md`](docs/benchmarking.md).
 
 ## Setup and usage
 
-> [!NOTE]
-> **Forthcoming.** Only cloning works today. The commands below show the intended interface and will be finalized when each part is implemented.
+Requires Python 3.11 or newer. Run all commands from the repository root.
+
+### Available now
+
+Windows (PowerShell):
+
+```powershell
+git clone https://github.com/mukhul/edgevision.git
+cd edgevision
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use Command Prompt with `.venv\Scripts\activate.bat`.
+
+Linux / macOS:
 
 ```bash
 git clone https://github.com/mukhul/edgevision.git
 cd edgevision
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
-Planned interface (not yet functional):
+Then:
 
 ```bash
-# Environment (CPU)
-python3.11 -m venv .venv
-source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -e ".[cpu,dev]"          # GPU: ".[gpu,dev]" — onnxruntime and onnxruntime-gpu must not be installed together
+python -m edgevision.device          # hardware, packages, CUDA support, ONNX Runtime providers
+python -m edgevision.device --json   # the same report as JSON
+python -m edgevision.config          # validate configs/default.yaml (or pass another path)
+python -m pytest                     # run the test suite
+```
 
-# Report hardware, library versions, and ONNX Runtime execution providers
-python -m edgevision.device
+PyTorch, ONNX Runtime, OpenCV and Ultralytics are **not** installed by this package yet. The environment report lists them as missing until the stages that need them add their (CPU and GPU) installation instructions.
 
+### Planned interface
+
+> [!NOTE]
+> **Forthcoming.** These commands show the intended interface and do not work yet.
+
+```bash
 # Export the PyTorch model to ONNX and validate it against PyTorch outputs
 python scripts/export_onnx.py
 
@@ -176,8 +216,10 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 ## Roadmap
 
 - [x] Initial repository scaffold and design documents
-- [ ] Configuration loading and validation
-- [ ] Hardware / software environment report and device selection
+- [x] Installable package with a pytest setup
+- [x] Configuration loading and validation
+- [x] Hardware / software environment report
+- [ ] Device and execution-provider selection for inference backends
 - [ ] Video reader with frame limit and robust error handling
 - [ ] PyTorch detection backend
 - [ ] Annotated video output
@@ -197,9 +239,9 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 
 ## Known limitations
 
-- The repository contains no functional code yet.
-- Dependencies are listed with lower bounds only and have not been installed or tested together.
-- `configs/default.yaml` is a draft; its fields may change.
+- No perception, inference, or benchmarking code exists yet; only configuration and environment reporting work.
+- `configs/default.yaml` is validated but not yet used by any pipeline stage; fields may still change as those stages are built.
+- The environment report shows what the installed frameworks *offer*. Whether inference really runs on a GPU will only be verified once the inference backends exist.
 - Free cloud GPUs vary in model and availability, so any GPU results will apply only to the recorded hardware.
 - ONNX Runtime may not be faster than PyTorch for a given model and device; the project will report whatever is observed.
 

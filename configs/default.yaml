@@ -1,8 +1,15 @@
-# EdgeVision default experiment configuration — DRAFT
+# EdgeVision default experiment configuration
 #
-# This file is not read by any code yet. It records the intended settings
-# and shape of the configuration; field names may change when config
-# parsing and validation are implemented.
+# This file is the single source of default values. It is loaded and
+# validated by edgevision.config; check it with:
+#
+#     python -m edgevision.config configs/default.yaml
+#
+# Every section and field is required; use null where a value is "not set".
+# Unknown fields are rejected so that typos are caught early.
+#
+# Only loading and validation exist so far: no detection, tracking, export
+# or benchmarking code consumes these settings yet.
 
 model:
   name: yolov8n
