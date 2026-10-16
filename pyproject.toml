@@ -27,6 +27,14 @@ dependencies = [
 dev = [
     "pytest>=8.0,<10",
 ]
+# Video decoding. The headless build has no GUI (no cv2.imshow), which is all
+# EdgeVision needs and avoids GUI system libraries. Do not install it next to
+# opencv-python: both provide the same `cv2` module and overwrite each other.
+# 4.10.0.84 is the first release built for NumPy 2; OpenCV 5 is capped out
+# until it has been tested with the rest of the stack.
+vision = [
+    "opencv-python-headless>=4.10.0.84,<5",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "edgevision.__version__" }

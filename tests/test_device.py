@@ -201,6 +201,17 @@ def test_conflicting_onnxruntime_packages_are_flagged(bare_machine: pytest.Monke
     assert any("More than one ONNX Runtime package" in w for w in env["warnings"])
 
 
+def test_conflicting_opencv_packages_are_flagged(bare_machine: pytest.MonkeyPatch) -> None:
+    # e.g. Ultralytics pulls in opencv-python next to our opencv-python-headless
+    versions = {"opencv-python": "4.14.0.94", "opencv-python-headless": "4.14.0.94"}
+    bare_machine.setattr(device, "_installed_version", versions.get)
+
+    env = device.collect_environment()
+
+    assert env["packages"]["OpenCV"] == versions
+    assert any("More than one OpenCV package" in w for w in env["warnings"])
+
+
 # --- nvidia-smi --------------------------------------------------------------
 
 

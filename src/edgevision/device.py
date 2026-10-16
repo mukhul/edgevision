@@ -264,6 +264,15 @@ def find_warnings(env: dict[str, Any]) -> list[str]:
             + "). They overwrite each other's files: uninstall all of them, then install exactly one."
         )
 
+    opencv_distributions = env["packages"].get("OpenCV", {})
+    if len(opencv_distributions) > 1:
+        warnings.append(
+            "More than one OpenCV package is installed ("
+            + ", ".join(opencv_distributions)
+            + "). They all provide the same cv2 module and overwrite each other: uninstall all "
+            "of them, then install exactly one (EdgeVision uses opencv-python-headless)."
+        )
+
     torch, ort = env["torch"], env["onnxruntime"]
     for name, probe in (("PyTorch", torch), ("ONNX Runtime", ort)):
         if probe.get("error"):
@@ -396,7 +405,7 @@ def format_report(env: dict[str, Any]) -> str:
             installed = ", ".join(f"{dist} {ver}" for dist, ver in found.items())
             lines.append(_row(name, installed))
         else:
-            lines.append(_row(name, f"not installed (needed later for {purpose})"))
+            lines.append(_row(name, f"not installed (needed for {purpose})"))
 
     lines += ["", "Framework acceleration support"]
     lines += _torch_lines(env["torch"])

@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Only the project foundation exists so far: an installable package, validated configuration loading, and an environment report. No detection, tracking, ONNX export, GPU execution, or benchmarking is implemented, and **no benchmark results have been recorded**. Everything described below as *planned* is the design target, not existing functionality.
+> Only the project foundation and video input exist so far: an installable package, validated configuration loading, an environment report, and a frame-by-frame video reader. No detection, tracking, ONNX export, GPU execution, or benchmarking is implemented, and **no benchmark results have been recorded**. Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -23,7 +23,7 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Installable package (`pip install -e ".[dev]"`) | ✅ | ✅ | n/a |
 | Configuration loading and validation | ✅ | ✅ | n/a |
 | Hardware / software environment report | ✅ | ✅ | n/a |
-| Video input (OpenCV, prerecorded files) | ✅ | — | — |
+| Video input (OpenCV, prerecorded files) | ✅ | ✅ | n/a |
 | Object detection — PyTorch backend | ✅ | — | — |
 | ONNX export and numerical validation | ✅ | — | — |
 | Object detection — ONNX Runtime CPU | ✅ | — | — |
@@ -43,7 +43,9 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - An installable `edgevision` package (src layout) whose only required dependency is PyYAML.
 - `edgevision.config`: loads `configs/default.yaml` (or any given file) into typed, immutable settings. Missing fields, wrong types, out-of-range values, unknown fields and duplicate keys are rejected, and every problem is listed with its location.
 - `edgevision.device`: reports Python, OS, CPU, NVIDIA GPU hardware (via `nvidia-smi`), optional packages, PyTorch CUDA support and ONNX Runtime execution providers. It works when PyTorch and ONNX Runtime are not installed, and keeps "a GPU is present" separate from "a framework can use it".
-- pytest tests for all of the above, which need no GPU, network, or ML packages.
+- `edgevision.video.VideoReader`: reads a prerecorded video one frame at a time (BGR, zero-based indices), with an optional `max_frames` limit, defensive metadata handling (width, height, FPS, reported frame count, codec) and guaranteed release of the OpenCV capture. OpenCV is an optional extra (`vision`).
+- `scripts/inspect_video.py`: reports a video's metadata, how many frames could actually be decoded, and why reading stopped.
+- pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV is replaced by a fake in unit tests, and a few integration tests use real OpenCV on a synthetic video when it is installed.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
 ## Intended scope
@@ -115,14 +117,20 @@ edgevision/
 │   └── edgevision/
 │       ├── __init__.py      # package marker and version
 │       ├── config.py        # YAML loading and validation
-│       └── device.py        # environment / hardware report
+│       ├── device.py        # environment / hardware report
+│       └── video/
+│           ├── __init__.py
+│           └── reader.py    # frame-by-frame video reading (OpenCV)
 ├── scripts/
-│   └── README.md            # planned CLI entry points
+│   ├── README.md            # CLI entry points (implemented and planned)
+│   └── inspect_video.py     # report video metadata and decodable frames
 ├── tests/
 │   ├── README.md            # how to run tests; planned coverage
 │   ├── test_config.py
 │   ├── test_device.py
-│   └── test_package.py
+│   ├── test_inspect_video.py
+│   ├── test_package.py
+│   └── test_video_reader.py
 ├── docs/
 │   ├── architecture.md      # planned components and data flow
 │   ├── benchmarking.md      # planned timing methodology
@@ -136,7 +144,7 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (backend interface, PyTorch backend, ONNX backend, export), `video/` (reader, writer), `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
+Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (backend interface, PyTorch backend, ONNX backend, export), `video/writer`, `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
 
 ## Planned benchmark methodology
 
@@ -165,7 +173,7 @@ cd edgevision
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,vision]"   # vision = OpenCV, needed for video
 ```
 
 If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use Command Prompt with `.venv\Scripts\activate.bat`.
@@ -178,7 +186,7 @@ cd edgevision
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,vision]"   # vision = OpenCV, needed for video
 ```
 
 Then:
@@ -188,9 +196,27 @@ python -m edgevision.device          # hardware, packages, CUDA support, ONNX Ru
 python -m edgevision.device --json   # the same report as JSON
 python -m edgevision.config          # validate configs/default.yaml (or pass another path)
 python -m pytest                     # run the test suite
+
+# Report a video's metadata and how many frames can be decoded
+python scripts/inspect_video.py data/input/sample.mp4
+python scripts/inspect_video.py data/input/sample.mp4 --max-frames 100
 ```
 
-PyTorch, ONNX Runtime, OpenCV and Ultralytics are **not** installed by this package yet. The environment report lists them as missing until the stages that need them add their (CPU and GPU) installation instructions.
+The `vision` extra installs `opencv-python-headless` (OpenCV without GUI functions). Do not also install `opencv-python`: both provide the same `cv2` module and conflict; `python -m edgevision.device` warns if more than one OpenCV package is present. Without the `vision` extra the package and tests still work, and the video integration tests are skipped with a reason.
+
+Reading video from Python:
+
+```python
+from edgevision.video import VideoReader
+
+with VideoReader("data/input/sample.mp4", max_frames=100) as reader:
+    print(reader.metadata)            # width, height, fps, frame_count, fourcc (None if unknown)
+    for frame_index, frame in reader:  # frame: BGR uint8 array, shape (height, width, 3)
+        ...
+print(reader.frames_read, reader.stop_reason)  # e.g. 100 StopReason.MAX_FRAMES
+```
+
+PyTorch, ONNX Runtime and Ultralytics are **not** installed by this package yet. The environment report lists them as missing until the stages that need them add their (CPU and GPU) installation instructions.
 
 ### Planned interface
 
@@ -220,7 +246,7 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [x] Configuration loading and validation
 - [x] Hardware / software environment report
 - [ ] Device and execution-provider selection for inference backends
-- [ ] Video reader with frame limit and robust error handling
+- [x] Video reader with frame limit and robust error handling
 - [ ] PyTorch detection backend
 - [ ] Annotated video output
 - [ ] Multi-object tracking with ByteTrack
@@ -239,7 +265,8 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 
 ## Known limitations
 
-- No perception, inference, or benchmarking code exists yet; only configuration and environment reporting work.
+- No perception, inference, or benchmarking code exists yet; only configuration, environment reporting, and video reading work.
+- Video metadata is what the file *reports*; the frame count in particular can be missing or wrong. OpenCV signals the end of a video and an undecodable frame the same way, so a corrupt file may simply end early (the inspection command flags this when the reported count is larger).
 - `configs/default.yaml` is validated but not yet used by any pipeline stage; fields may still change as those stages are built.
 - The environment report shows what the installed frameworks *offer*. Whether inference really runs on a GPU will only be verified once the inference backends exist.
 - Free cloud GPUs vary in model and availability, so any GPU results will apply only to the recorded hardware.
