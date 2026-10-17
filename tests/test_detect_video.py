@@ -179,7 +179,7 @@ def test_inference_failure_leaves_no_results_file(
 
     err = capsys.readouterr().err
     assert "Detection failed on frame 0" in err and "kernel crashed" in err
-    assert "No results file was written" in err
+    assert "No output files were written" in err
     assert not out.exists()
     assert not out.with_name(out.name + ".partial").exists()
 
@@ -208,3 +208,174 @@ def test_undecodable_video_fails_clearly(fake_yolo, tmp_path: Path, capsys: pyte
     broken.write_text("not a video", encoding="utf-8")
     assert load_script().main([str(broken), "--config", str(CONFIG)]) == 1
     assert "ERROR:" in capsys.readouterr().err
+
+
+# --- annotated output video (Prompt 5) ------------------------------------------------------
+
+
+def reopen(path: Path) -> tuple[object, int]:
+    from edgevision.video.reader import VideoReader
+
+    with VideoReader(path) as reader:
+        count = sum(1 for _ in reader)
+        return reader.metadata, count
+
+
+def test_writes_annotated_video_with_source_size_and_fps(
+    fake_yolo, video: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_yolo.boxes = [(10, 10, 60, 70, 0.9, 15)]
+    out = tmp_path / "annotated.mp4"
+
+    assert load_script().main([str(video), "--output-video", str(out), "--config", str(CONFIG)]) == 0
+
+    metadata, frames = reopen(out)
+    assert frames == FRAMES_IN_VIDEO  # one annotated frame per processed frame
+    assert (metadata.width, metadata.height) == (160, 120)  # same as the source
+    assert metadata.fps == pytest.approx(10.0)  # the source's frame rate
+    printed = " ".join(capsys.readouterr().out.split())
+    assert f"Annotated video {out}" in printed and "(source)" in printed
+    assert not (tmp_path / "annotated.partial.mp4").exists()
+
+
+def test_annotated_video_respects_frame_limit_and_fps_override(fake_yolo, video: Path, tmp_path: Path) -> None:
+    out = tmp_path / "annotated.mp4"
+    args = [str(video), "--max-frames", "5", "--output-video", str(out), "--fps", "25", "--config", str(CONFIG)]
+    assert load_script().main(args) == 0
+    metadata, frames = reopen(out)
+    assert frames == 5
+    assert metadata.fps == pytest.approx(25.0)
+
+
+def test_video_without_detections_is_still_written(fake_yolo, video: Path, tmp_path: Path) -> None:
+    out = tmp_path / "annotated.mp4"  # fake_yolo returns no boxes by default
+    assert load_script().main([str(video), "--output-video", str(out), "--config", str(CONFIG)]) == 0
+    assert reopen(out)[1] == FRAMES_IN_VIDEO
+
+
+def test_json_output_is_unchanged_when_also_writing_video(fake_yolo, video: Path, tmp_path: Path) -> None:
+    fake_yolo.boxes = [(10, 10, 60, 70, 0.9, 15)]
+    script = load_script()
+    only_json, both = tmp_path / "only.json", tmp_path / "both.json"
+    assert script.main([str(video), "--json", str(only_json), "--config", str(CONFIG)]) == 0
+    assert script.main([str(video), "--json", str(both), "--output-video", str(tmp_path / "a.mp4"), "--config", str(CONFIG)]) == 0
+
+    a, b = (json.loads(p.read_text(encoding="utf-8")) for p in (only_json, both))
+    a.pop("created_utc"), b.pop("created_utc")
+    assert a == b  # adding --output-video does not change the JSON
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--fps", "25"],  # --fps without --output-video
+        ["--output-video", "out.avi"],  # not .mp4
+        ["--output-video", "x.mp4", "--fps", "0"],
+        ["--output-video", "x.mp4", "--fps", "nan"],
+    ],
+)
+def test_invalid_video_output_arguments(extra: list[str]) -> None:
+    result = run_subprocess("clip.mp4", *extra)
+    assert result.returncode == 2
+    assert "usage:" in result.stderr
+
+
+def test_output_video_cannot_be_the_input(fake_yolo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"x")
+    with pytest.raises(SystemExit) as info:
+        load_script().main([str(source), "--output-video", str(tmp_path / "." / "clip.mp4"), "--config", str(CONFIG)])
+    assert info.value.code == 2
+    assert "must not be the input video" in capsys.readouterr().err
+
+
+def test_output_video_and_json_must_differ(fake_yolo, video: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    same = tmp_path / "out.mp4"
+    with pytest.raises(SystemExit):
+        load_script().main([str(video), "--output-video", str(same), "--json", str(same), "--config", str(CONFIG)])
+    assert "must be different files" in capsys.readouterr().err
+
+
+def test_existing_output_video_is_protected(fake_yolo, video: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "annotated.mp4"
+    out.write_bytes(b"previous video")
+    assert load_script().main([str(video), "--output-video", str(out), "--config", str(CONFIG)]) == 1
+    assert "already exists" in capsys.readouterr().err
+    assert out.read_bytes() == b"previous video"
+    assert fake_yolo.loaded_paths == []
+
+
+def test_failure_mid_video_leaves_no_output_video(
+    fake_yolo, video: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls = {"n": 0}
+    script = load_script()
+    real_annotate = script.annotate_frame
+
+    def failing_annotate(image, detections):  # fail on the 4th frame, after 3 were written
+        calls["n"] += 1
+        if calls["n"] == 4:
+            raise OSError("disk full")
+        return real_annotate(image, detections)
+
+    monkeypatch.setattr(script, "annotate_frame", failing_annotate)
+    out, js = tmp_path / "annotated.mp4", tmp_path / "out.json"
+
+    assert script.main([str(video), "--output-video", str(out), "--json", str(js), "--config", str(CONFIG)]) == 1
+
+    assert "disk full" in capsys.readouterr().err
+    for path in (out, tmp_path / "annotated.partial.mp4", js, tmp_path / "out.json.partial"):
+        assert not path.exists(), path
+
+
+def test_inference_failure_leaves_no_output_video(fake_yolo, video: Path, tmp_path: Path) -> None:
+    fake_yolo.predict_error = RuntimeError("kernel crashed")
+    out = tmp_path / "annotated.mp4"
+    assert load_script().main([str(video), "--output-video", str(out), "--config", str(CONFIG)]) == 1
+    assert not out.exists() and not (tmp_path / "annotated.partial.mp4").exists()
+
+
+def test_ctrl_c_leaves_no_output_video(fake_yolo, video: Path, tmp_path: Path) -> None:
+    fake_yolo.predict_error = KeyboardInterrupt()
+    out = tmp_path / "annotated.mp4"
+    assert load_script().main([str(video), "--output-video", str(out), "--config", str(CONFIG)]) == 130
+    assert not out.exists() and not (tmp_path / "annotated.partial.mp4").exists()
+
+
+def test_odd_sized_source_fails_clearly(fake_yolo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cv2 = pytest.importorskip("cv2", reason='OpenCV not installed (pip install -e ".[vision]")')
+    np = pytest.importorskip("numpy")
+    odd = tmp_path / "odd.avi"
+    writer = cv2.VideoWriter(str(odd), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (64, 48))
+    for _ in range(3):
+        writer.write(np.zeros((48, 64, 3), dtype=np.uint8))
+    writer.release()
+    script = load_script()
+
+    # OpenCV cannot write an odd-sized test video (it silently crops it, the very
+    # problem being tested), so wrap the pipeline to hand out 63-px-wide frames.
+    class OddFrames:
+        def __init__(self, pipeline):
+            self.pipeline = pipeline
+
+        def __getattr__(self, name):
+            return getattr(self.pipeline, name)
+
+        def __enter__(self):
+            self.pipeline.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self.pipeline.__exit__(*exc)
+
+        def __iter__(self):
+            for result in self.pipeline:
+                yield type(result)(result.frame_index, result.detections, image=result.image[:, :63].copy())
+
+    real_pipeline = script.VideoDetectionPipeline
+    script.VideoDetectionPipeline = lambda *a, **k: OddFrames(real_pipeline(*a, **k))
+    out = tmp_path / "odd.mp4"
+
+    assert script.main([str(odd), "--output-video", str(out), "--config", str(CONFIG)]) == 1
+    assert "even width and height" in capsys.readouterr().err
+    assert not out.exists()

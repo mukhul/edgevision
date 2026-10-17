@@ -1,6 +1,6 @@
 # Architecture (planned)
 
-> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`), the **PyTorch backend** (`models/pytorch_backend.py`; its own `auto`/`cpu`/`cuda` device selection) and the detection part of the **Pipeline** (`pipeline.py`, with JSON output in `results.py`). Every other component below is planned.
+> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`), the **PyTorch backend** (`models/pytorch_backend.py`; its own `auto`/`cpu`/`cuda` device selection) the detection part of the **Pipeline** (`pipeline.py`, with JSON output in `results.py`), and **Video output** with annotation (`video/annotator.py`, `video/writer.py`). Every other component below is planned.
 
 ## Data flow
 
@@ -33,7 +33,8 @@ flowchart LR
 | Configuration | `config.py` | Load and validate YAML experiment configs; record the resolved config with every result |
 | Device detection | `device.py` | Report Python, PyTorch, OpenCV, ONNX Runtime, OS, CPU, GPU and CUDA details; list available execution providers; select a device without silently changing a requested one |
 | Video input | `video/reader.py` | Open a video, stream frames sequentially, expose FPS/size/frame count, apply a frame limit, raise clear errors for missing or corrupt files |
-| Video output | `video/writer.py` | Write annotated frames; always release resources, including on error |
+| Annotation | `video/annotator.py` | *Implemented:* draw boxes and `class confidence` labels on a copy of a frame; boxes clipped to the frame; fixed colour per class ID. No model or file I/O. Track IDs are planned with tracking |
+| Video output | `video/writer.py` | *Implemented:* write frames with OpenCV (`mp4v`), validating fps, size (even only) and every frame; write to `.partial.mp4` and rename on success; release and clean up on error. Output FPS: override, else source, else 30 with a warning |
 | Backend interface | `models/base.py` | `Detection` record, shared `DetectionSettings` (input size, thresholds, class filter), `Detector` protocol (`detect(frame, frame_index) -> list[Detection]`), frame validation, detector error types |
 | PyTorch backend | `models/pytorch_backend.py` | `PytorchYoloDetector`: load pretrained Ultralytics YOLO weights, choose `auto`/`cpu`/`cuda` (never silently downgrading an explicit CUDA request), run Ultralytics' preprocessing, inference and NMS, convert results to `Detection` records |
 | ONNX backend | `models/onnx_backend.py` | Run the exported model with ONNX Runtime; verify which execution provider was actually selected |
@@ -41,7 +42,7 @@ flowchart LR
 | Tracking | `tracking/tracker.py` | Wrap an existing ByteTrack implementation; assign persistent track IDs; kept separate from detection |
 | Benchmarking | `benchmarks/` | Timing primitives, run orchestration, statistics, JSON/CSV reporting |
 | Evaluation | `evaluation/detection_metrics.py` | IoU matching, precision/recall/F1, and mAP only where the protocol and annotations support it |
-| Pipeline | `pipeline.py` | *Implemented:* `VideoDetectionPipeline` feeds frames from the reader to any `Detector`, yields per-frame `FrameDetections`, checks frame indices, keeps only counters for a `PipelineSummary`, and releases the video on every exit path. *Planned:* tracker → annotator → writer stages |
+| Pipeline | `pipeline.py` | *Implemented:* `VideoDetectionPipeline` feeds frames from the reader to any `Detector`, yields per-frame `FrameDetections`, checks frame indices, keeps only counters for a `PipelineSummary`, and releases the video on every exit path. Each result also carries its decoded frame, so the annotator → writer stage is driven by `scripts/detect_video.py --output-video`. *Planned:* a tracker stage between detection and annotation |
 | Detection results | `results.py` | *Implemented:* stream per-frame detections to JSON (`edgevision.video_detections` v1), written to `.partial` and atomically renamed when complete |
 
 Module names follow the long-term plan and may change if there is a clear technical reason. Modules will be added only when they are implemented.

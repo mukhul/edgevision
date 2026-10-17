@@ -9,6 +9,7 @@ commands can never drift apart in their defaults.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 from edgevision.config import DEFAULT_CONFIG_PATH, ModelConfig
@@ -34,6 +35,17 @@ def positive_int(text: str) -> int:
         raise argparse.ArgumentTypeError(f"must be a positive integer, got {text!r}") from None
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
+    return value
+
+
+def positive_float(text: str) -> float:
+    """argparse type: a finite number > 0 (e.g. a frame rate)."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a positive number, got {text!r}") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number greater than 0, got {text!r}")
     return value
 
 

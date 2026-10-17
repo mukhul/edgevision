@@ -131,6 +131,14 @@ def test_frames_are_processed_in_order_with_correct_indices(fake_video: FakeVide
     assert [r.frame_index for r in results] == [0, 1, 2, 3, 4]
 
 
+def test_each_result_carries_the_frame_it_describes(fake_video: FakeVideo) -> None:
+    detector = FakeDetector({1: ["cat"]})
+    results = run_all(VideoDetectionPipeline("clip.mp4", detector))
+    # The exact frame given to the detector is attached, so annotation draws on the right image.
+    assert [r.image for r in results] == [frame for frame, _ in detector.calls]
+    assert FrameDetections(0, (), image="a") == FrameDetections(0, (), image="b")  # image not compared
+
+
 def test_detections_are_aggregated_correctly(fake_video: FakeVideo) -> None:
     detector = FakeDetector({0: ["cat"], 2: ["cat", "dog", "person"], 4: ["dog"]})
     pipeline = VideoDetectionPipeline("clip.mp4", detector)

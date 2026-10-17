@@ -3,6 +3,8 @@
 Data flow::
 
     VideoReader --frame, index--> Detector.detect --> FrameDetections --> summary / JSON
+                                                          |
+                                                          +--> annotator --> VideoWriter
 
 This module only *coordinates* existing components: ``VideoReader`` decodes
 frames, any :class:`~edgevision.models.base.Detector` finds objects. It owns
@@ -37,7 +39,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -52,10 +54,17 @@ class PipelineError(Exception):
 
 @dataclass(frozen=True)
 class FrameDetections:
-    """The detections found in one video frame (possibly none)."""
+    """The detections found in one video frame (possibly none).
+
+    ``image`` is the decoded BGR frame the detections refer to, so later
+    stages (such as the annotator) can draw on it. It is not compared, not
+    shown in ``repr`` and not written to JSON. Holding on to many results
+    also holds their images in memory, so consume results as they arrive.
+    """
 
     frame_index: int
     detections: tuple[Detection, ...]
+    image: Any = field(default=None, compare=False, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-friendly form. ``frame_index`` is stored once, at frame level."""
@@ -159,12 +168,12 @@ class VideoDetectionPipeline:
                         f"Detection failed on frame {frame_index} of {self.video_path}: "
                         f"{type(exc).__name__}: {exc}"
                     ) from exc
-                yield self._record(frame_index, detections)
+                yield self._record(frame_index, frame, detections)
             self._completed = True
         finally:
             self._reader.close()
 
-    def _record(self, frame_index: int, detections: Any) -> FrameDetections:
+    def _record(self, frame_index: int, frame: Any, detections: Any) -> FrameDetections:
         """Check the detector kept its side of the contract, then update the counters."""
         if not isinstance(detections, (list, tuple)) or not all(
             isinstance(d, Detection) for d in detections
@@ -183,7 +192,7 @@ class VideoDetectionPipeline:
         if detections:
             self._frames_with_detections += 1
             self._by_class.update(d.class_name for d in detections)
-        return FrameDetections(frame_index, tuple(detections))
+        return FrameDetections(frame_index, tuple(detections), image=frame)
 
     # --- results ----------------------------------------------------------------
 

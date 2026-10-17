@@ -4,6 +4,8 @@ Benchmark outputs, annotated videos, and plots. **Generated outputs are not comm
 
 No benchmark results exist yet.
 
+Annotated videos from `detect_video.py --output-video results/<name>.mp4` are also written here by convention. They use codec `mp4v`, the source's size and FPS, and are written as `<name>.partial.mp4` until complete. Like everything else in this folder, they are ignored by Git.
+
 ## Video detection results (`detect_video.py --json`)
 
 `python scripts/detect_video.py <video> --json results/<name>.json` writes one JSON file per run. It is written to `<name>.json.partial` first and renamed only when complete, so a file named `.json` is always a finished run. A leftover `.partial` file comes from a crash and can be deleted. An existing file is replaced only with `--overwrite`.
