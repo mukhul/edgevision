@@ -1,6 +1,6 @@
 # Architecture (planned)
 
-> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`), the **PyTorch backend** (`models/pytorch_backend.py`; its own `auto`/`cpu`/`cuda` device selection) the detection part of the **Pipeline** (`pipeline.py`, with JSON output in `results.py`), and **Video output** with annotation (`video/annotator.py`, `video/writer.py`). Every other component below is planned.
+> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`), the **PyTorch backend** (`models/pytorch_backend.py`; its own `auto`/`cpu`/`cuda` device selection) the detection part of the **Pipeline** (`pipeline.py`, with JSON output in `results.py`), **Video output** with annotation (`video/annotator.py`, `video/writer.py`), and **Tracking** (`tracking/`). Every other component below is planned.
 
 ## Data flow
 
@@ -39,10 +39,10 @@ flowchart LR
 | PyTorch backend | `models/pytorch_backend.py` | `PytorchYoloDetector`: load pretrained Ultralytics YOLO weights, choose `auto`/`cpu`/`cuda` (never silently downgrading an explicit CUDA request), run Ultralytics' preprocessing, inference and NMS, convert results to `Detection` records |
 | ONNX backend | `models/onnx_backend.py` | Run the exported model with ONNX Runtime; verify which execution provider was actually selected |
 | Export | `models/export.py` | Export weights to ONNX with a documented opset; check loading, output shapes, finite values, and numerical agreement with PyTorch |
-| Tracking | `tracking/tracker.py` | Wrap an existing ByteTrack implementation; assign persistent track IDs; kept separate from detection |
+| Tracking | `tracking/base.py`, `tracking/bytetrack.py` | *Implemented:* `TrackedDetection` (a `Detection` plus `track_id`) and a `Tracker` protocol (`update(detections, frame)` returns the same detections in the same order, adding IDs; `reset()`). `ByteTrackTracker` adapts Ultralytics' `BYTETracker`: our detections go in as Ultralytics `Boxes`, and its detection indices map IDs back to the original records. It runs after any detector, so there is no second inference. The pipeline resets it per video and checks that it only adds IDs. IDs are not persistent identities |
 | Benchmarking | `benchmarks/` | Timing primitives, run orchestration, statistics, JSON/CSV reporting |
 | Evaluation | `evaluation/detection_metrics.py` | IoU matching, precision/recall/F1, and mAP only where the protocol and annotations support it |
-| Pipeline | `pipeline.py` | *Implemented:* `VideoDetectionPipeline` feeds frames from the reader to any `Detector`, yields per-frame `FrameDetections`, checks frame indices, keeps only counters for a `PipelineSummary`, and releases the video on every exit path. Each result also carries its decoded frame, so the annotator → writer stage is driven by `scripts/detect_video.py --output-video`. *Planned:* a tracker stage between detection and annotation |
+| Pipeline | `pipeline.py` | *Implemented:* `VideoDetectionPipeline` feeds frames from the reader to any `Detector`, yields per-frame `FrameDetections`, checks frame indices, keeps only counters for a `PipelineSummary`, and releases the video on every exit path. Each result also carries its decoded frame, so the annotator → writer stage is driven by `scripts/detect_video.py --output-video`. An optional `Tracker` runs between detection and annotation (reset at the start of each video) |
 | Detection results | `results.py` | *Implemented:* stream per-frame detections to JSON (`edgevision.video_detections` v1), written to `.partial` and atomically renamed when complete |
 
 Module names follow the long-term plan and may change if there is a clear technical reason. Modules will be added only when they are implemented.

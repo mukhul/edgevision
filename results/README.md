@@ -49,6 +49,30 @@ This example is a two-frame run (`--max-frames 2`); the values illustrate the fo
 
 The file contains no image data and no timing information.
 
+### With tracking (`--tracking`)
+
+Tracking extends the same schema (still version 1) with extra keys only; files from detection-only runs are unchanged:
+
+```json
+  "tracker": {"name": "bytetrack", "config": "ultralytics:bytetrack.yaml",
+              "settings": {"tracker_type": "bytetrack", "track_high_thresh": 0.25, "track_low_thresh": 0.1,
+                           "new_track_thresh": 0.25, "track_buffer": 30, "match_thresh": 0.8, "fuse_score": true}},
+  "frames": [
+    {"frame_index": 0, "detections": [
+      {"bbox_xyxy": [...], "confidence": 0.85, "class_id": 0, "class_name": "person", "track_id": 1},
+      {"bbox_xyxy": [...], "confidence": 0.31, "class_id": 16, "class_name": "dog", "track_id": null}
+    ]}
+  ],
+  "summary": {..., "tracking": {"tracker": "bytetrack", "detections_with_track_id": 344,
+                                "distinct_track_ids_observed": 18}}
+```
+
+| Field | Notes |
+|-------|-------|
+| `tracker` | Tracker name, where its settings came from, and the exact settings (after `bbox_format`) |
+| `track_id` | Integer track ID, or `null` for a detection the tracker has not assigned to a confirmed track. IDs are unique within one run only, may have gaps, and are not persistent identities |
+| `summary.tracking.distinct_track_ids_observed` | Distinct IDs that appeared in this run, **not** a count of real-world objects (lost objects can return with a new ID) |
+
 ## Planned layout
 
 Each run will write to its own uniquely named folder so earlier results are never silently overwritten:

@@ -10,8 +10,8 @@
 #
 # Currently used: the `model` section supplies defaults for
 # scripts/detect_image.py and scripts/detect_video.py, and the `video` section
-# (input, max_frames) for scripts/detect_video.py. The other sections are
-# validated but not yet used (tracking, export, output, benchmarking).
+# (input, max_frames) and the `tracking` section for scripts/detect_video.py.
+# The other sections are validated but not yet used (export, output, benchmarking).
 
 model:
   name: yolov8n
@@ -32,7 +32,7 @@ video:
   max_frames: 300                   # null = whole video
 
 tracking:
-  enabled: true
+  enabled: false                    # detect_video.py --tracking / --no-tracking overrides this
   tracker: bytetrack
 
 output:

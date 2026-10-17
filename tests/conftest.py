@@ -87,3 +87,52 @@ def fake_yolo(monkeypatch: pytest.MonkeyPatch) -> FakeYoloController:
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=FakeYOLO))
     return ctl
+
+
+class FakeTracker:
+    """Deterministic stand-in for ByteTrackTracker.
+
+    Gives every class name its own ID (in order of first appearance), so the
+    same class keeps the same ID across frames, and IDs restart at 1 after
+    reset(). Detections whose class is in ``skip`` are left without an ID,
+    like detections a real tracker has not confirmed yet.
+    """
+
+    name = "fake"
+
+    def __init__(self, config: Any = None) -> None:
+        self.config_source = "fake-config" if config is None else str(config)
+        self.settings = {"tracker_type": "fake"}
+        self.skip: set[str] = set()
+        self.fail_at_frame: int | None = None
+        self.fail_on_reset = False
+        self.reset_calls = 0
+        self.update_calls: list[int] = []
+        self._ids: dict[str, int] = {}
+
+    def reset(self) -> None:
+        if self.fail_on_reset:
+            raise RuntimeError("reset exploded")
+        self.reset_calls += 1
+        self._ids = {}
+
+    def update(self, detections: list, frame: Any) -> list:
+        from edgevision.tracking.base import TrackedDetection
+
+        index = detections[0].frame_index if detections else None
+        self.update_calls.append(index)
+        if index is not None and index == self.fail_at_frame:
+            raise RuntimeError("association blew up")
+        result = []
+        for d in detections:
+            if d.class_name in self.skip:
+                result.append(d)
+                continue
+            track_id = self._ids.setdefault(d.class_name, len(self._ids) + 1)
+            result.append(TrackedDetection.from_detection(d, track_id))
+        return result
+
+
+@pytest.fixture
+def fake_tracker_class() -> type[FakeTracker]:
+    return FakeTracker

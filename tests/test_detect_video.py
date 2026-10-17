@@ -379,3 +379,122 @@ def test_odd_sized_source_fails_clearly(fake_yolo, tmp_path: Path, capsys: pytes
     assert script.main([str(odd), "--output-video", str(out), "--config", str(CONFIG)]) == 1
     assert "even width and height" in capsys.readouterr().err
     assert not out.exists()
+
+
+# --- tracking (Prompt 6) ----------------------------------------------------------------
+
+
+@pytest.fixture
+def script_with_fake_tracker(fake_tracker_class):
+    """The script module with ByteTrackTracker replaced by the deterministic fake."""
+    script = load_script()
+    created = []
+
+    def make(config=None):
+        tracker = fake_tracker_class(config)
+        created.append(tracker)
+        return tracker
+
+    script.ByteTrackTracker = make
+    script.created_trackers = created
+    return script
+
+
+def test_tracking_adds_track_ids_to_json_and_summary(
+    fake_yolo, video: Path, tmp_path: Path, script_with_fake_tracker, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_yolo.boxes = [(10, 10, 50, 60, 0.9, 15), (60, 10, 100, 80, 0.6, 0)]
+    out = tmp_path / "tracks.json"
+    args = [str(video), "--tracking", "--max-frames", "4", "--json", str(out), "--config", str(CONFIG)]
+
+    assert script_with_fake_tracker.main(args) == 0
+
+    tracker = script_with_fake_tracker.created_trackers[0]
+    assert tracker.reset_calls == 1 and tracker.update_calls == [0, 1, 2, 3]
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["tracker"]["name"] == "fake"
+    assert [[d["track_id"] for d in f["detections"]] for f in doc["frames"]] == [[1, 2]] * 4
+    assert doc["summary"]["tracking"]["distinct_track_ids_observed"] == 2
+    printed = " ".join(capsys.readouterr().out.split())
+    assert "Distinct track IDs 2 observed in this video" in printed
+    assert "not a count of real objects" in printed
+    assert fake_yolo.predict_calls and len(fake_yolo.predict_calls) == 4  # inference once per frame
+
+
+def test_tracking_is_off_by_default(fake_yolo, video: Path, tmp_path: Path, script_with_fake_tracker) -> None:
+    out = tmp_path / "plain.json"
+    assert script_with_fake_tracker.main([str(video), "--json", str(out), "--config", str(CONFIG)]) == 0
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert script_with_fake_tracker.created_trackers == []
+    assert "tracker" not in doc and "tracking" not in doc["summary"]
+
+
+def test_config_can_enable_tracking_and_cli_can_disable_it(
+    fake_yolo, video: Path, tmp_path: Path, script_with_fake_tracker
+) -> None:
+    data = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    data["tracking"]["enabled"] = True
+    config = tmp_path / "tracking_on.yaml"
+    config.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    assert script_with_fake_tracker.main([str(video), "--config", str(config)]) == 0
+    assert len(script_with_fake_tracker.created_trackers) == 1
+    assert script_with_fake_tracker.main([str(video), "--no-tracking", "--config", str(config)]) == 0
+    assert len(script_with_fake_tracker.created_trackers) == 1  # no new tracker created
+
+
+def test_tracker_config_is_passed_through(fake_yolo, video: Path, tmp_path: Path, script_with_fake_tracker) -> None:
+    custom = tmp_path / "my_bytetrack.yaml"
+    args = [str(video), "--tracking", "--tracker-config", str(custom), "--config", str(CONFIG)]
+    assert script_with_fake_tracker.main(args) == 0
+    assert script_with_fake_tracker.created_trackers[0].config_source == str(custom)
+
+
+def test_tracker_config_without_tracking_is_an_argument_error() -> None:
+    result = run_subprocess("clip.mp4", "--tracker-config", "x.yaml")
+    assert result.returncode == 2
+    assert "--tracker-config only applies" in result.stderr
+
+
+def test_tracker_setup_failure_fails_before_loading_the_model(
+    fake_yolo, video: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from edgevision.optional import MissingDependencyError
+
+    script = load_script()
+
+    def missing(config=None):
+        raise MissingDependencyError('lap is required to run ByteTrack tracking but is not installed. Install it with: python -m pip install -e ".[tracking]"')
+
+    script.ByteTrackTracker = missing
+    assert script.main([str(video), "--tracking", "--config", str(CONFIG)]) == 1
+    assert '.[tracking]' in capsys.readouterr().err
+    assert fake_yolo.loaded_paths == []
+
+
+def test_tracking_with_annotated_video(fake_yolo, video: Path, tmp_path: Path, script_with_fake_tracker) -> None:
+    fake_yolo.boxes = [(10, 10, 50, 60, 0.9, 15)]
+    out = tmp_path / "tracked.mp4"
+    args = [str(video), "--tracking", "--output-video", str(out), "--config", str(CONFIG)]
+    assert script_with_fake_tracker.main(args) == 0
+    assert reopen(out)[1] == FRAMES_IN_VIDEO
+
+
+def test_tracking_failure_mid_video_leaves_no_outputs(
+    fake_yolo, video: Path, tmp_path: Path, script_with_fake_tracker, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_yolo.boxes = [(10, 10, 50, 60, 0.9, 15)]
+    original = script_with_fake_tracker.ByteTrackTracker
+
+    def failing(config=None):
+        tracker = original(config)
+        tracker.fail_at_frame = 3
+        return tracker
+
+    script_with_fake_tracker.ByteTrackTracker = failing
+    js, mp4 = tmp_path / "t.json", tmp_path / "t.mp4"
+    args = [str(video), "--tracking", "--json", str(js), "--output-video", str(mp4), "--config", str(CONFIG)]
+
+    assert script_with_fake_tracker.main(args) == 1
+    assert "Tracking failed on frame 3" in capsys.readouterr().err
+    assert not js.exists() and not mp4.exists()

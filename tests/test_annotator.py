@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from edgevision.models.base import Detection
+from edgevision.tracking.base import TrackedDetection
 from edgevision.video.annotator import (
     PALETTE,
     annotate_frame,
@@ -66,6 +67,11 @@ def test_label_shows_class_name_and_confidence() -> None:
     assert label_text(det((0, 0, 1, 1), name="potted plant", conf=0.8)) == "potted plant 0.80"
 
 
+def test_label_shows_track_id_for_tracked_detections() -> None:
+    tracked = TrackedDetection.from_detection(det((0, 0, 1, 1), class_id=0, name="person", conf=0.92), 3)
+    assert label_text(tracked) == "person #3 0.92"
+
+
 @pytest.mark.parametrize(
     ("box", "expected"),
     [
@@ -116,6 +122,15 @@ def test_multiple_detections_get_their_own_labels_and_colours(cv2: Any, drawn_la
     assert drawn_labels == ["cat 0.90", "person 0.55"]
     assert np.array_equal(out[70, 10], np.array(class_color(15)))
     assert np.array_equal(out[70, 90], np.array(class_color(0)))
+
+
+def test_tracked_detection_is_drawn_like_a_detection_plus_id(cv2: Any, drawn_labels: list[str]) -> None:
+    plain = det((40, 50, 120, 110))
+    tracked = TrackedDetection.from_detection(plain, 7)
+    a = annotate_frame(blank(), [plain])
+    b = annotate_frame(blank(), [tracked])
+    assert drawn_labels == ["cat 0.91", "cat #7 0.91"]
+    assert np.array_equal(a[50:111, 40:121], b[50:111, 40:121])  # same box, same class colour
 
 
 def test_same_class_gets_the_same_colour_on_every_frame(cv2: Any) -> None:

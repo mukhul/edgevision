@@ -29,6 +29,13 @@ File layout (schema ``edgevision.video_detections``, version 1)::
     }
 
 Unknown values (e.g. a video whose FPS is not reported) are ``null``.
+
+With tracking enabled (an additive, backward-compatible extension of v1):
+a top-level ``"tracker": {"name", "config", "settings"}`` block after
+``bbox_format``; a ``"track_id"`` key on every detection (an integer, or
+``null`` if the tracker did not assign one); and ``summary.tracking`` with
+``tracker``, ``detections_with_track_id`` and ``distinct_track_ids_observed``.
+Detection-only files contain none of these keys.
 """
 
 from __future__ import annotations
@@ -61,9 +68,14 @@ def video_header(
     model: str,
     device: str,
     settings: dict[str, Any],
+    tracker: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The descriptive part of a results file, written before the frames."""
-    return {
+    """The descriptive part of a results file, written before the frames.
+
+    ``tracker`` (name and settings) is added only when tracking was used, so
+    detection-only files keep exactly their original layout.
+    """
+    header = {
         "edgevision_version": edgevision.__version__,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "video": {
@@ -77,6 +89,9 @@ def video_header(
         "detector": {"backend": backend, "model": model, "device": device, "settings": settings},
         "bbox_format": BBOX_FORMAT,
     }
+    if tracker is not None:
+        header["tracker"] = tracker
+    return header
 
 
 class VideoDetectionsWriter:

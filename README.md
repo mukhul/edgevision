@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, and an annotated copy of the video with boxes, class names and confidences. Tracking, ONNX export, GPU execution, and benchmarking are not implemented. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
+> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, and optional multi-object tracking with ByteTrack (track IDs in the video and JSON). ONNX export, GPU execution, and benchmarking are not implemented. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -29,7 +29,7 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | ONNX export and numerical validation | ✅ | — | — |
 | Object detection — ONNX Runtime CPU | ✅ | — | — |
 | Object detection — ONNX Runtime CUDA (when available) | ✅ | — | — |
-| Multi-object tracking (ByteTrack) | ✅ | — | — |
+| Multi-object tracking (ByteTrack, optional) | ✅ | ✅ ⁴ | n/a |
 | Annotated output video (boxes, class names, confidences) | ✅ | ✅ ³ | n/a |
 | Latency / throughput benchmark runner | ✅ | — | — |
 | Detection-quality evaluation (ground truth) | ✅ | — | — |
@@ -45,6 +45,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 
 ³ Covered by annotator tests on real pixels, mocked writer tests, real write-and-reopen integration tests, and command tests. The command was run end to end with the real YOLOv8n model on the same 113-frame clip (Linux, CPU): the annotated MP4 reopened at the source's 1024×576 and 30 FPS with all 113 frames, and sample frames were inspected visually.
 
+⁴ Covered by tests of the real Ultralytics ByteTrack on hand-made moving boxes (stable IDs, briefly missed objects, reset, low-score continuation), mocked pipeline and command tests, and an opt-in real YOLOv8n + ByteTrack test. It was also run end to end on the 113-frame clip (Linux, CPU) with an annotated video and JSON, and sample frames were inspected visually. No tracking accuracy has been measured: there is no ground truth.
+
 **What exists today:**
 
 - An installable `edgevision` package (src layout) whose only required dependency is PyYAML.
@@ -57,7 +59,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - `edgevision.pipeline`: `VideoDetectionPipeline` feeds every frame from `VideoReader` to an already-created detector, one frame at a time, yields per-frame results (`FrameDetections`), and keeps only counters for its `PipelineSummary`. `edgevision.results` streams those results to a JSON file that only appears once it is complete.
 - `edgevision.video.annotator`: draws each detection (box, class name, confidence) on a **copy** of a frame, in a fixed colour per class.
 - `edgevision.video.writer`: writes frames to an `.mp4` file with validated size and frame rate, and publishes it only when complete.
-- `scripts/detect_video.py`: runs detection over a video, prints a processing summary, and can save per-frame detections as JSON and/or an annotated copy of the video.
+- `edgevision.tracking`: `TrackedDetection` (a `Detection` plus `track_id`), a `Tracker` protocol, and `ByteTrackTracker`, which feeds each frame's detections to Ultralytics' ByteTrack and attaches the resulting IDs to the original detections.
+- `scripts/detect_video.py`: runs detection over a video, prints a processing summary, and can save per-frame detections as JSON and/or an annotated copy of the video. `--tracking` adds ByteTrack track IDs to both.
 - pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV, PyTorch and Ultralytics are replaced by fakes in unit tests. A few integration tests use real OpenCV when it is installed, and one opt-in test runs the real YOLOv8n model.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
@@ -132,6 +135,10 @@ edgevision/
 │       ├── config.py        # YAML loading and validation
 │       ├── device.py        # environment / hardware report
 │       ├── optional.py      # helpful errors for missing optional packages
+│       ├── tracking/
+│       │   ├── __init__.py
+│       │   ├── base.py      # TrackedDetection, Tracker protocol
+│       │   └── bytetrack.py # ByteTrackTracker (Ultralytics ByteTrack)
 │       ├── cli.py           # option parsing shared by the detection commands
 │       ├── pipeline.py      # VideoReader -> Detector, per-frame results, summary
 │       ├── results.py       # streaming, atomic JSON output for video detections
@@ -163,6 +170,7 @@ edgevision/
 │   ├── test_pipeline.py
 │   ├── test_pytorch_backend.py
 │   ├── test_results.py
+│   ├── test_tracking.py
 │   ├── test_writer.py
 │   └── test_video_reader.py
 ├── docs/
@@ -178,7 +186,7 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (ONNX backend, export), `tracking/`, `benchmarks/` (timing, runner, metrics, report), and `evaluation/`.
+Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (ONNX backend, export), `benchmarks/` (timing, runner, metrics, report), and `evaluation/`.
 
 ## Planned benchmark methodology
 
@@ -206,6 +214,7 @@ Optional extras keep the base install light. Install only what you need:
 | `dev` | pytest, NumPy | running the tests |
 | `vision` | `opencv-python` | reading video and images |
 | `detector` | Ultralytics, PyTorch (and torchvision via Ultralytics) | YOLO object detection |
+| `tracking` | Ultralytics, `lap` | ByteTrack tracking (`--tracking`) |
 
 Windows (PowerShell):
 
@@ -215,7 +224,7 @@ cd edgevision
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,vision,detector]"
+python -m pip install -e ".[dev,vision,detector,tracking]"
 ```
 
 If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use Command Prompt with `.venv\Scripts\activate.bat`. On Windows the default PyPI `torch` wheel is the CPU-only build, which is what a laptop without an NVIDIA GPU needs.
@@ -230,7 +239,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 # Linux without an NVIDIA GPU: install the much smaller CPU-only PyTorch build first
 python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e ".[dev,vision,detector]"
+python -m pip install -e ".[dev,vision,detector,tracking]"
 ```
 
 On Linux the default PyPI `torch` wheel is a large CUDA build; the extra line above avoids it. macOS wheels from PyPI are CPU/MPS builds. No CUDA-specific PyTorch build is pinned by this project.
@@ -240,7 +249,7 @@ On Linux the default PyPI `torch` wheel is a large CUDA build; the extra line ab
 >
 > ```bash
 > python -m pip uninstall -y opencv-python-headless opencv-python
-> python -m pip install -e ".[dev,vision,detector]"
+> python -m pip install -e ".[dev,vision,detector,tracking]"
 > ```
 >
 > `python -m edgevision.device` warns if more than one OpenCV package is installed.
@@ -265,6 +274,9 @@ python scripts/detect_image.py path/to/photo.jpg --device cpu --conf 0.4 --json 
 python scripts/detect_video.py data/input/sample.mp4
 python scripts/detect_video.py data/input/sample.mp4 --max-frames 100 --json results/sample_detections.json
 python scripts/detect_video.py data/input/sample.mp4 --output-video results/sample_annotated.mp4
+
+# ...with multi-object tracking: track IDs in the annotated video and the JSON
+python scripts/detect_video.py data/input/sample.mp4 --tracking --output-video results/sample_tracked.mp4 --json results/sample_tracks.json
 ```
 
 `detect_image.py` takes its model, input size, thresholds and class filter from `configs/default.yaml`; `--model`, `--imgsz`, `--conf` and `--iou` override them. `--device` is `auto` (CUDA only if PyTorch can use it, otherwise CPU), `cpu`, or `cuda` (fails with an explanation if CUDA is unavailable). `--json` refuses to replace an existing file unless `--overwrite` is given. Exit status is 0 on success, 1 if the image, model or inference fails, and 2 for invalid arguments.
@@ -348,9 +360,27 @@ flowchart LR
 
 `--output-video` can be combined with `--json`; the JSON is identical with or without it.
 
+#### Multi-object tracking
+
+Detection answers *what is where in this frame*. Tracking adds *which of these is the same object as before*. It links detections across frames and gives each linked object a **track ID**.
+
+```mermaid
+flowchart LR
+    R[VideoReader] --> D[Detector<br/>runs once per frame] -->|Detections| T[ByteTrackTracker<br/>attaches IDs] -->|same detections + track_id| F[FrameDetections]
+    F --> A[annotate_frame<br/>'cat #3 0.91'] --> W[VideoWriter]
+    F -.-> J[(JSON with track_id)]
+```
+
+- **How ByteTrack is integrated.** `ByteTrackTracker` hands each frame's `Detection` records to Ultralytics' `BYTETracker`, through Ultralytics' public `Boxes` input format. `BYTETracker` reports, for every track, which input detection it matched, so the track ID is attached to the **original** detection: boxes and confidences stay exactly as the detector produced them. The detector is not run a second time, and tracking does not depend on which detector backend produced the detections.
+- **The contract.** The tracker returns the same detections, in the same order, only adding IDs. Detections it has not assigned to a track stay ordinary detections, with `track_id: null` in JSON and no `#ID` in the video. So enabling tracking never changes detection counts. The pipeline checks this and resets the tracker at the start of every video, so IDs never carry over between videos.
+- **How ByteTrack associates.** Each existing track's next position is predicted (a Kalman filter). Confident detections (≥ `track_high_thresh`) are matched to the predictions by box overlap. Weaker detections (> `track_low_thresh`) then get a second chance to continue tracks that were not matched. Unmatched tracks are kept as "lost" for `track_buffer` frames, then dropped. A new object gets an ID once it is confirmed, which after the first frame of a video means seen in two consecutive frames.
+- **Enabling it.** `--tracking` (or `tracking.enabled: true` in the config; `--no-tracking` overrides that). Defaults come from Ultralytics' built-in `bytetrack.yaml`. `--tracker-config my.yaml` uses your own file in the same format. Install the `tracking` extra. Ultralytics needs the `lap` package for matching and would otherwise try to pip-install it at runtime, which EdgeVision prevents by checking for it first.
+- **Output.** Annotated video labels read `person #3 0.92`, with colours still by class. JSON adds a `tracker` block, a `track_id` on every detection, and `summary.tracking`; the schema is in [`results/README.md`](results/README.md). Detection-only runs produce exactly the same JSON as before.
+- **What the distinct-ID count means.** The summary reports how many distinct track IDs *appeared in this run*. It is **not** a count of real-world objects. An object that is occluded or missed for longer than `track_buffer` frames comes back with a new ID, two objects that cross can swap IDs, and ID numbers can have gaps, because candidate tracks that were never confirmed also use up numbers. On the 113-frame sample clip, 18 distinct IDs appeared, numbered from 1 up to 59. Identity is never guaranteed across occlusions or long gaps.
+
 #### Tests
 
-`python -m pytest` runs unit tests in which OpenCV, PyTorch and Ultralytics are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Two additional tests run the genuine YOLOv8n model: one on a photo bundled with Ultralytics, one on a short video built from that photo. They are opt-in, and need the `detector` extra and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
+`python -m pytest` runs unit tests in which OpenCV, PyTorch and Ultralytics are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Three additional tests run the genuine YOLOv8n model: on a photo bundled with Ultralytics, on a short video built from that photo, and on that video with real ByteTrack. They are opt-in, and need the `detector` (and, for tracking, `tracking`) extra and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
 
 ```bash
 # Linux / macOS
@@ -378,7 +408,7 @@ python -m pytest -m model -v
 # Export the PyTorch model to ONNX and validate it against PyTorch outputs
 python scripts/export_onnx.py
 
-# Process a video with tracking (track IDs in the annotated output)
+# Process a video with a chosen backend (PyTorch or ONNX Runtime), with tracking and annotated output
 python scripts/run_video.py --input data/input/sample.mp4 --backend pytorch --output results/annotated_pytorch.mp4
 
 # Benchmark backends on identical frames
@@ -401,7 +431,7 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [x] Detection interface and PyTorch detection backend (single frame)
 - [x] Run detection on video frames, with processing summary and JSON export
 - [x] Annotated video output
-- [ ] Multi-object tracking with ByteTrack
+- [x] Multi-object tracking with ByteTrack (optional, `--tracking`)
 - [ ] ONNX export with output-shape, finite-value, and numerical-agreement checks
 - [ ] ONNX Runtime CPU backend
 - [ ] Benchmark runner with JSON / CSV export
@@ -417,7 +447,9 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 
 ## Known limitations
 
-- There is no tracking, ONNX backend, or benchmarking yet; annotations show class and confidence only, with no track IDs.
+- There is no ONNX backend or benchmarking yet.
+- Tracking quality is not measured: there are no ground-truth track annotations, so no HOTA/MOTA/IDF1. Track IDs are only consistent within one run and are not persistent identities.
+- Only ByteTrack is supported. Detections pass through the detector's confidence threshold (0.25 by default) before tracking, so ByteTrack's low-score second pass only sees detections above that; Ultralytics' own `model.track()` lowers the threshold to 0.1 for this reason. A lower `--conf` gives the tracker more to work with, but also adds more low-confidence detections to the output.
 - Annotated videos use `mp4v`, which some web browsers cannot play. Source videos with an odd width or height cannot be written (OpenCV would crop them).
 - Detections are not checked against ground truth, so nothing here measures accuracy. On a short cat clip, YOLOv8n labelled many objects as other classes (for example "potted plant" and "dog"), which is a reminder that detection counts are not correctness.
 - Real model inference has been verified on Linux (CPU). GPU (CUDA) inference has not been tested: no NVIDIA GPU was available.

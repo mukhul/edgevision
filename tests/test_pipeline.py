@@ -225,6 +225,94 @@ def test_summary_to_dict_is_consistent(fake_video: FakeVideo) -> None:
     assert d["stop_reason"] == "end_of_video"
 
 
+# --- tracking ------------------------------------------------------------------------
+
+
+def test_tracking_disabled_keeps_detection_only_output(fake_video: FakeVideo) -> None:
+    pipeline = VideoDetectionPipeline("clip.mp4", FakeDetector({0: ["cat"]}))
+    results = run_all(pipeline)
+    assert pipeline.tracker is None
+    assert not any(r.tracked for r in results)
+    assert "track_id" not in results[0].to_dict()["detections"][0]
+    assert "tracking" not in pipeline.summary().to_dict()
+
+
+def test_tracker_ids_are_attached_in_frame_order(fake_video: FakeVideo, fake_tracker_class) -> None:
+    tracker = fake_tracker_class()
+    detector = FakeDetector({0: ["cat", "dog"], 1: ["dog"], 3: ["cat", "dog"]})
+    pipeline = VideoDetectionPipeline("clip.mp4", detector, tracker=tracker)
+    results = run_all(pipeline)
+
+    assert tracker.update_calls == [0, 1, None, 3, None]  # one update per frame, in order
+    assert [[(d.class_name, d.track_id) for d in r.detections] for r in results] == [
+        [("cat", 1), ("dog", 2)], [("dog", 2)], [], [("cat", 1), ("dog", 2)], [],
+    ]
+    s = pipeline.summary()
+    assert (s.total_detections, s.detections_with_track_id, s.distinct_track_ids) == (5, 5, 2)
+    assert s.to_dict()["tracking"] == {
+        "tracker": "fake", "detections_with_track_id": 5, "distinct_track_ids_observed": 2,
+    }
+
+
+def test_detections_without_a_track_id_are_kept(fake_video: FakeVideo, fake_tracker_class) -> None:
+    tracker = fake_tracker_class()
+    tracker.skip = {"dog"}  # the tracker leaves dogs unassigned
+    pipeline = VideoDetectionPipeline("clip.mp4", FakeDetector({0: ["cat", "dog"]}), tracker=tracker)
+    first = run_all(pipeline)[0]
+    assert [d.class_name for d in first.detections] == ["cat", "dog"]  # nothing dropped or reordered
+    assert [d.get("track_id") for d in first.to_dict()["detections"]] == [1, None]
+    assert pipeline.summary().total_detections == 2
+    assert pipeline.summary().detections_with_track_id == 1
+
+
+def test_tracker_is_reset_for_every_video(fake_video: FakeVideo, fake_tracker_class) -> None:
+    tracker = fake_tracker_class()
+    first = run_all(VideoDetectionPipeline("a.mp4", FakeDetector({0: ["dog"], 1: ["cat"]}), tracker=tracker))
+    second = run_all(VideoDetectionPipeline("b.mp4", FakeDetector({0: ["cat"]}), tracker=tracker))
+    assert tracker.reset_calls == 2
+    assert first[1].detections[0].track_id == 2  # cat was the 2nd class seen in video a
+    assert second[0].detections[0].track_id == 1  # IDs did not carry over to video b
+
+
+def test_tracker_failure_is_reported_and_video_released(fake_video: FakeVideo, fake_tracker_class) -> None:
+    tracker = fake_tracker_class()
+    tracker.fail_at_frame = 2
+    pipeline = VideoDetectionPipeline("clip.mp4", FakeDetector({i: ["cat"] for i in range(5)}), tracker=tracker)
+    with pytest.raises(PipelineError, match="Tracking failed on frame 2 of clip.mp4: RuntimeError: association blew up") as info:
+        run_all(pipeline)
+    assert isinstance(info.value.__cause__, RuntimeError)
+    assert fake_video.readers[0].closed
+
+
+def test_tracker_reset_failure_is_reported(fake_video: FakeVideo, fake_tracker_class) -> None:
+    tracker = fake_tracker_class()
+    tracker.fail_on_reset = True
+    with pytest.raises(PipelineError, match="Tracking failed on reset"):
+        run_all(VideoDetectionPipeline("clip.mp4", FakeDetector(), tracker=tracker))
+    assert fake_video.readers[0].closed
+
+
+@pytest.mark.parametrize(
+    ("bad_output", "message"),
+    [
+        (lambda dets: dets[:-1], "expected the 2 detections"),
+        (lambda dets: list(reversed(dets)), "changed or reordered"),
+        (lambda dets: [Detection(0, (0, 0, 1, 1), 0.1, 0, "person")] * 2, "changed or reordered"),
+        (lambda dets: None, "expected the 2 detections"),
+    ],
+)
+def test_tracker_may_only_attach_ids(fake_video: FakeVideo, fake_tracker_class, bad_output, message) -> None:
+    tracker = fake_tracker_class()
+    tracker.update = lambda detections, frame: bad_output(list(detections))
+    with pytest.raises(PipelineError, match=message):
+        run_all(VideoDetectionPipeline("clip.mp4", FakeDetector({0: ["cat", "dog"]}), tracker=tracker))
+
+
+def test_object_that_is_not_a_tracker_is_rejected(fake_video: FakeVideo) -> None:
+    with pytest.raises(TypeError, match="tracker must implement"):
+        VideoDetectionPipeline("clip.mp4", FakeDetector(), tracker=object())  # type: ignore[arg-type]
+
+
 # --- errors -------------------------------------------------------------------------
 
 
@@ -395,3 +483,37 @@ def test_real_yolov8n_on_a_short_video(tmp_path: Path) -> None:
     assert [r.frame_index for r in results] == list(range(6))
     assert all(any(d.class_name == "bus" for d in r.detections) for r in results)
     assert summary.total_detections == sum(len(r.detections) for r in results)
+
+
+@pytest.mark.model
+@pytest.mark.skipif(
+    not RUN_MODEL_TESTS,
+    reason="real-model test is opt-in: set EDGEVISION_RUN_MODEL_TESTS=1 (needs the detector and tracking extras and models/yolov8n.pt)",
+)
+def test_real_yolov8n_with_bytetrack_keeps_the_bus_id(tmp_path: Path) -> None:
+    """Real model + real ByteTrack: the bus in a 6-frame video keeps one track ID."""
+    if not WEIGHTS.is_file():
+        pytest.skip(f"weights not found at {WEIGHTS}; run scripts/detect_image.py once to download them")
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("ultralytics")
+    pytest.importorskip("lap", reason='tracking extra not installed (pip install -e ".[tracking]")')
+    from ultralytics.utils import ASSETS
+
+    from edgevision.models import PytorchYoloDetector
+    from edgevision.tracking import ByteTrackTracker
+
+    image = cv2.resize(cv2.imread(str(ASSETS / "bus.jpg")), (480, 640))
+    video = tmp_path / "bus.avi"
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (480, 640))
+    for shift in range(6):
+        writer.write(cv2.warpAffine(image, np.float32([[1, 0, 4 * shift], [0, 1, 0]]), (480, 640)))
+    writer.release()
+
+    with PytorchYoloDetector(WEIGHTS, device="cpu") as detector:
+        pipeline = VideoDetectionPipeline(video, detector, tracker=ByteTrackTracker())
+        results = run_all(pipeline)
+
+    bus_ids = {d.track_id for r in results for d in r.detections if d.class_name == "bus" and hasattr(d, "track_id")}
+    assert len(bus_ids) == 1  # one bus, one ID across all frames
+    assert pipeline.summary().distinct_track_ids >= 2  # the bus and at least one person

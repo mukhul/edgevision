@@ -6,6 +6,7 @@ Run from the repository root:
     python scripts/detect_video.py data/input/sample.mp4
     python scripts/detect_video.py data/input/sample.mp4 --max-frames 100 --json results/sample_detections.json
     python scripts/detect_video.py data/input/sample.mp4 --output-video results/sample_annotated.mp4
+    python scripts/detect_video.py data/input/sample.mp4 --tracking --output-video results/sample_tracked.mp4
 
 The video path, frame limit, model, input size, thresholds and class filter
 default to configs/default.yaml; command-line options override them. This is
@@ -35,6 +36,7 @@ from edgevision.models import DetectorError, PytorchYoloDetector
 from edgevision.optional import MissingDependencyError
 from edgevision.pipeline import PipelineError, PipelineSummary, VideoDetectionPipeline
 from edgevision.results import VideoDetectionsWriter, video_header
+from edgevision.tracking import ByteTrackTracker, TrackingError
 from edgevision.video.annotator import annotate_frame
 from edgevision.video.reader import StopReason, VideoError
 from edgevision.video.writer import (
@@ -53,6 +55,7 @@ examples:
   python scripts/detect_video.py data/input/sample.mp4 --max-frames 100 --device cpu
   python scripts/detect_video.py data/input/sample.mp4 --all-frames --json results/sample_detections.json
   python scripts/detect_video.py data/input/sample.mp4 --output-video results/sample_annotated.mp4
+  python scripts/detect_video.py data/input/sample.mp4 --tracking --json results/sample_tracks.json
 """
 
 
@@ -82,6 +85,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--fps", type=positive_float, metavar="FPS",
         help="frame rate of --output-video (default: the input video's FPS; "
         f"{FALLBACK_FPS:g} with a warning if the input does not report one)",
+    )
+    parser.add_argument(
+        "--tracking", action=argparse.BooleanOptionalAction, default=None,
+        help="track objects across frames with ByteTrack and add track IDs to the output "
+        "(default: tracking.enabled from the config, which is off)",
+    )
+    parser.add_argument(
+        "--tracker-config", type=Path, metavar="YAML",
+        help="ByteTrack settings file in Ultralytics' bytetrack.yaml format (default: Ultralytics' built-in one)",
     )
     parser.add_argument("--overwrite", action="store_true", help="allow --json / --output-video to replace existing files")
     parser.add_argument("--quiet", action="store_true", help="do not print progress while processing")
@@ -153,7 +165,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         max_frames = args.max_frames if args.max_frames is not None else config.video.max_frames
 
+    tracking = args.tracking if args.tracking is not None else config.tracking.enabled
+
     # Argument conflicts (status 2), then cheap file checks (status 1), all before loading a model.
+    if args.tracker_config is not None and not tracking:
+        parser.error("--tracker-config only applies when tracking is enabled (--tracking)")
     out_video = args.output_video
     if args.fps is not None and out_video is None:
         parser.error("--fps only applies together with --output-video")
@@ -175,6 +191,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if not Path(model).exists():
         print(f"Note: {model} not found locally; Ultralytics will try to download it.", file=sys.stderr)
+    tracker = None
+    if tracking:
+        try:  # cheap, and fails fast on a missing package or a bad config
+            tracker = ByteTrackTracker(args.tracker_config)
+        except (TrackingError, MissingDependencyError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+
     video_writer = None
     try:
         # ExitStack closes everything in reverse order when the block ends, even on
@@ -185,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
                 PytorchYoloDetector(model, device=args.device, settings=settings)
             )
             pipeline = stack.enter_context(
-                VideoDetectionPipeline(video, detector, max_frames=max_frames)
+                VideoDetectionPipeline(video, detector, max_frames=max_frames, tracker=tracker)
             )
             json_writer = None
             if args.json is not None:
@@ -195,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
                     model=model,
                     device=detector.device,
                     settings=settings.to_dict(),
+                    tracker=None if tracker is None else {
+                        "name": tracker.name, "config": tracker.config_source, "settings": tracker.settings,
+                    },
                 )
                 json_writer = stack.enter_context(
                     VideoDetectionsWriter(args.json, header, overwrite=args.overwrite)
@@ -241,6 +268,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(format_summary(summary, model, device, describe_settings(settings)))
+    if tracker is not None:
+        print(
+            f"  Tracking                   {tracker.name} ({tracker.config_source})\n"
+            f"  Detections with a track ID {summary.detections_with_track_id} of {summary.total_detections}\n"
+            f"  Distinct track IDs         {summary.distinct_track_ids} observed in this video "
+            "(not a count of real objects: IDs can be lost and reassigned)"
+        )
     if video_writer is not None:
         print(
             f"  Annotated video            {out_video}\n"

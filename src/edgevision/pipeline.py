@@ -2,7 +2,7 @@
 
 Data flow::
 
-    VideoReader --frame, index--> Detector.detect --> FrameDetections --> summary / JSON
+    VideoReader --frame, index--> Detector.detect --> [Tracker.update] --> FrameDetections --> summary / JSON
                                                           |
                                                           +--> annotator --> VideoWriter
 
@@ -45,6 +45,7 @@ from types import TracebackType
 from typing import Any
 
 from edgevision.models.base import Detection, Detector
+from edgevision.tracking.base import TrackedDetection, Tracker
 from edgevision.video.reader import StopReason, VideoMetadata, VideoReader
 
 
@@ -65,15 +66,19 @@ class FrameDetections:
     frame_index: int
     detections: tuple[Detection, ...]
     image: Any = field(default=None, compare=False, repr=False)
+    #: True when a tracker processed this frame; then every detection in the JSON
+    #: form has a ``track_id`` key (``null`` if the tracker did not assign one).
+    tracked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-friendly form. ``frame_index`` is stored once, at frame level."""
-        return {
-            "frame_index": self.frame_index,
-            "detections": [
-                {k: v for k, v in d.to_dict().items() if k != "frame_index"} for d in self.detections
-            ],
-        }
+        detections = []
+        for d in self.detections:
+            item = {k: v for k, v in d.to_dict().items() if k != "frame_index"}
+            if self.tracked:
+                item.setdefault("track_id", None)
+            detections.append(item)
+        return {"frame_index": self.frame_index, "detections": detections}
 
 
 @dataclass(frozen=True)
@@ -92,13 +97,19 @@ class PipelineSummary:
     completed: bool  # True if iteration ran to the end (end of video or max_frames)
     stop_reason: StopReason | None  # None if not completed
     ended_before_reported_count: bool
+    # Tracking (only meaningful when a tracker was used)
+    tracker: str | None = None
+    detections_with_track_id: int = 0
+    #: Distinct track IDs that appeared in this run. IDs can be lost and
+    #: reassigned, so this is NOT a count of real-world objects.
+    distinct_track_ids: int = 0
 
     @property
     def frames_without_detections(self) -> int:
         return self.frames_processed - self.frames_with_detections
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "frames_processed": self.frames_processed,
             "frames_with_detections": self.frames_with_detections,
             "frames_without_detections": self.frames_without_detections,
@@ -109,6 +120,13 @@ class PipelineSummary:
             "stop_reason": None if self.stop_reason is None else self.stop_reason.value,
             "ended_before_reported_count": self.ended_before_reported_count,
         }
+        if self.tracker is not None:  # detection-only output keeps its original keys
+            result["tracking"] = {
+                "tracker": self.tracker,
+                "detections_with_track_id": self.detections_with_track_id,
+                "distinct_track_ids_observed": self.distinct_track_ids,
+            }
+        return result
 
 
 class VideoDetectionPipeline:
@@ -119,6 +137,10 @@ class VideoDetectionPipeline:
         detector: Any object implementing the ``Detector`` protocol, already
             constructed (the pipeline does not create or close it).
         max_frames: Process at most this many frames; ``None`` for the whole video.
+        tracker: Optional object implementing the ``Tracker`` protocol. It is
+            reset when processing starts, so IDs never carry over from a
+            previous video, and then updated once per frame with that frame's
+            detections. ``None`` (default) means detection only.
 
     The video is opened immediately, so a missing or unreadable file fails
     here (``VideoError``), and ``metadata`` is available before processing.
@@ -132,13 +154,20 @@ class VideoDetectionPipeline:
         detector: Detector,
         *,
         max_frames: int | None = None,
+        tracker: Tracker | None = None,
     ) -> None:
         if not isinstance(detector, Detector):
             raise TypeError(
                 f"detector must implement detect(frame, frame_index) and close(), "
                 f"got {type(detector).__name__}"
             )
+        if tracker is not None and not isinstance(tracker, Tracker):
+            raise TypeError(
+                f"tracker must implement name, update(detections, frame) and reset(), "
+                f"got {type(tracker).__name__}"
+            )
         self.detector = detector
+        self.tracker = tracker
         self._reader = VideoReader(video_path, max_frames=max_frames)
         self.video_path = self._reader.path
         self.metadata = self._reader.metadata
@@ -149,6 +178,8 @@ class VideoDetectionPipeline:
         self._frames_processed = 0
         self._frames_with_detections = 0
         self._by_class: Counter[str] = Counter()
+        self._track_ids: set[int] = set()
+        self._detections_with_track_id = 0
 
     # --- processing ------------------------------------------------------------
 
@@ -160,6 +191,8 @@ class VideoDetectionPipeline:
 
     def _run(self) -> Iterator[FrameDetections]:
         try:
+            if self.tracker is not None:
+                self._call_tracker(self.tracker.reset, "reset")  # a new video starts with no tracks
             for frame_index, frame in self._reader:
                 try:
                     detections = self.detector.detect(frame, frame_index=frame_index)
@@ -168,13 +201,29 @@ class VideoDetectionPipeline:
                         f"Detection failed on frame {frame_index} of {self.video_path}: "
                         f"{type(exc).__name__}: {exc}"
                     ) from exc
+                self._check_detections(frame_index, detections)
+                if self.tracker is not None:
+                    tracked = self._call_tracker(
+                        lambda: self.tracker.update(detections, frame), f"frame {frame_index}"
+                    )
+                    self._check_tracked(frame_index, detections, tracked)
+                    detections = tracked
                 yield self._record(frame_index, frame, detections)
             self._completed = True
         finally:
             self._reader.close()
 
-    def _record(self, frame_index: int, frame: Any, detections: Any) -> FrameDetections:
-        """Check the detector kept its side of the contract, then update the counters."""
+    def _call_tracker(self, call: Any, where: str) -> Any:
+        try:
+            return call()
+        except Exception as exc:
+            raise PipelineError(
+                f"Tracking failed on {where} of {self.video_path}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _check_detections(frame_index: int, detections: Any) -> None:
+        """Check the detector kept its side of the contract."""
         if not isinstance(detections, (list, tuple)) or not all(
             isinstance(d, Detection) for d in detections
         ):
@@ -188,11 +237,39 @@ class VideoDetectionPipeline:
                     f"Detector labelled a detection from frame {frame_index} "
                     f"with frame_index={d.frame_index}"
                 )
+
+    @staticmethod
+    def _check_tracked(frame_index: int, detections: Any, tracked: Any) -> None:
+        """Check the tracker returned the same detections, in order, only adding IDs."""
+        if not isinstance(tracked, (list, tuple)) or len(tracked) != len(detections):
+            raise PipelineError(
+                f"Tracker returned {type(tracked).__name__} of length "
+                f"{len(tracked) if hasattr(tracked, '__len__') else '?'} for frame {frame_index}; "
+                f"expected the {len(detections)} detections it was given"
+            )
+        for before, after in zip(detections, tracked):
+            same = isinstance(after, Detection) and (
+                after.frame_index, after.bbox_xyxy, after.confidence, after.class_id, after.class_name
+            ) == (before.frame_index, before.bbox_xyxy, before.confidence, before.class_id, before.class_name)
+            if not same:
+                raise PipelineError(
+                    f"Tracker changed or reordered detections on frame {frame_index}; "
+                    "it may only attach track IDs"
+                )
+
+    def _record(self, frame_index: int, frame: Any, detections: Any) -> FrameDetections:
+        """Update the counters for one frame."""
         self._frames_processed += 1
         if detections:
             self._frames_with_detections += 1
             self._by_class.update(d.class_name for d in detections)
-        return FrameDetections(frame_index, tuple(detections), image=frame)
+        for d in detections:
+            if isinstance(d, TrackedDetection):
+                self._detections_with_track_id += 1
+                self._track_ids.add(d.track_id)
+        return FrameDetections(
+            frame_index, tuple(detections), image=frame, tracked=self.tracker is not None
+        )
 
     # --- results ----------------------------------------------------------------
 
@@ -208,6 +285,9 @@ class VideoDetectionPipeline:
             completed=self._completed,
             stop_reason=self._reader.stop_reason if self._completed else None,
             ended_before_reported_count=self._completed and self._reader.ended_before_reported_count,
+            tracker=None if self.tracker is None else self.tracker.name,
+            detections_with_track_id=self._detections_with_track_id,
+            distinct_track_ids=len(self._track_ids),
         )
 
     # --- resource handling --------------------------------------------------------
@@ -237,9 +317,10 @@ def process_video(
     detector: Detector,
     *,
     max_frames: int | None = None,
+    tracker: Tracker | None = None,
 ) -> PipelineSummary:
     """Process a whole video and return only the summary (detections are not kept)."""
-    with VideoDetectionPipeline(video_path, detector, max_frames=max_frames) as pipeline:
+    with VideoDetectionPipeline(video_path, detector, max_frames=max_frames, tracker=tracker) as pipeline:
         for _ in pipeline:
             pass
     return pipeline.summary()

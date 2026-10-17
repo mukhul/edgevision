@@ -46,6 +46,13 @@ detector = [
     "ultralytics>=8.4,<9",
     "torch>=2.2,<3",
 ]
+# Multi-object tracking with Ultralytics' ByteTrack. Ultralytics needs `lap`
+# for matching and would otherwise pip-install it silently at runtime the
+# first time a tracker is used, so it is declared here explicitly.
+tracking = [
+    "ultralytics>=8.4,<9",
+    "lap>=0.5.12,<0.6",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "edgevision.__version__" }

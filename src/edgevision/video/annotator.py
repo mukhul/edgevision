@@ -8,7 +8,8 @@ Usage::
 
 For each :class:`~edgevision.models.base.Detection` this draws a rectangle
 from its ``bbox_xyxy`` and a filled label with the class name and confidence,
-for example ``cat 0.91``. Colours depend only on the class ID, so a class
+for example ``cat 0.91``. A :class:`~edgevision.tracking.base.TrackedDetection`
+also shows its track ID: ``cat #3 0.91``. Colours depend only on the class ID, so a class
 keeps the same colour in every frame and every run.
 
 This module only draws: it knows nothing about models, inference or video
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from edgevision.models.base import Detection, validate_bgr_frame
 from edgevision.optional import import_optional
+from edgevision.tracking.base import TrackedDetection
 
 if TYPE_CHECKING:
     import numpy as np
@@ -67,6 +69,9 @@ def clip_box(
 
 
 def label_text(detection: Detection) -> str:
+    """``"cat 0.91"``, or ``"cat #3 0.91"`` for a detection with a track ID."""
+    if isinstance(detection, TrackedDetection):
+        return f"{detection.class_name} #{detection.track_id} {detection.confidence:.2f}"
     return f"{detection.class_name} {detection.confidence:.2f}"
 
 

@@ -63,6 +63,30 @@ def test_output_follows_the_documented_schema(tmp_path: Path) -> None:
     assert doc["created_utc"].endswith("Z")
 
 
+def test_detection_only_header_has_no_tracker_key() -> None:
+    assert "tracker" not in header()
+
+
+def test_tracked_output_includes_tracker_and_track_ids(tmp_path: Path) -> None:
+    from edgevision.tracking.base import TrackedDetection
+
+    tracked_header = {**header(), "tracker": {"name": "bytetrack", "config": "x.yaml", "settings": {"track_buffer": 30}}}
+    frames = [FrameDetections(0, (
+        TrackedDetection(0, (1, 2, 30, 40), 0.9, 15, "cat", 3),
+        Detection(0, (50, 50, 60, 60), 0.3, 0, "person"),  # not assigned to a track
+    ), tracked=True)]
+    path = tmp_path / "tracked.json"
+    with VideoDetectionsWriter(path, tracked_header) as writer:
+        writer.write_frame(frames[0])
+        writer.finish(SUMMARY)
+
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert list(doc)[7] == "tracker"
+    assert doc["tracker"]["name"] == "bytetrack"
+    assert [d["track_id"] for d in doc["frames"][0]["detections"]] == [3, None]
+    assert all(type(d["track_id"]) in (int, type(None)) for d in doc["frames"][0]["detections"])
+
+
 def test_video_with_no_frames_is_still_valid_json(tmp_path: Path) -> None:
     path = tmp_path / "empty.json"
     with VideoDetectionsWriter(path, header()) as writer:
