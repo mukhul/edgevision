@@ -180,6 +180,15 @@ class DetectionSettings:
                 )
             object.__setattr__(self, "classes", tuple(int(c) for c in classes))
 
+    def to_dict(self) -> dict[str, Any]:
+        """Plain JSON-friendly representation."""
+        return {
+            "input_size": self.input_size,
+            "conf_threshold": self.conf_threshold,
+            "iou_threshold": self.iou_threshold,
+            "classes": None if self.classes is None else list(self.classes),
+        }
+
     @classmethod
     def from_model_config(cls, model_config: Any) -> DetectionSettings:
         """Build settings from the ``model`` section of an EdgeVision config."""

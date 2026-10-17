@@ -9,8 +9,9 @@
 # Unknown fields are rejected so that typos are caught early.
 #
 # Currently used: the `model` section supplies defaults for
-# scripts/detect_image.py. The other sections are validated but not yet used
-# by any pipeline stage (video integration, tracking, export, benchmarking).
+# scripts/detect_image.py and scripts/detect_video.py, and the `video` section
+# (input, max_frames) for scripts/detect_video.py. The other sections are
+# validated but not yet used (tracking, export, output, benchmarking).
 
 model:
   name: yolov8n

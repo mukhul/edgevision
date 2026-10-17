@@ -1,6 +1,6 @@
 # Architecture (planned)
 
-> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`) and the **PyTorch backend** (`models/pytorch_backend.py`, single frames; its own `auto`/`cpu`/`cuda` device selection). Every other component below, including connecting detection to video, is planned.
+> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`), the **PyTorch backend** (`models/pytorch_backend.py`; its own `auto`/`cpu`/`cuda` device selection) and the detection part of the **Pipeline** (`pipeline.py`, with JSON output in `results.py`). Every other component below is planned.
 
 ## Data flow
 
@@ -41,7 +41,8 @@ flowchart LR
 | Tracking | `tracking/tracker.py` | Wrap an existing ByteTrack implementation; assign persistent track IDs; kept separate from detection |
 | Benchmarking | `benchmarks/` | Timing primitives, run orchestration, statistics, JSON/CSV reporting |
 | Evaluation | `evaluation/detection_metrics.py` | IoU matching, precision/recall/F1, and mAP only where the protocol and annotations support it |
-| Pipeline | `pipeline.py` | Compose reader → backend → tracker → annotator → writer |
+| Pipeline | `pipeline.py` | *Implemented:* `VideoDetectionPipeline` feeds frames from the reader to any `Detector`, yields per-frame `FrameDetections`, checks frame indices, keeps only counters for a `PipelineSummary`, and releases the video on every exit path. *Planned:* tracker → annotator → writer stages |
+| Detection results | `results.py` | *Implemented:* stream per-frame detections to JSON (`edgevision.video_detections` v1), written to `.partial` and atomically renamed when complete |
 
 Module names follow the long-term plan and may change if there is a clear technical reason. Modules will be added only when they are implemented.
 

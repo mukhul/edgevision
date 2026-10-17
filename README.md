@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, and single-image object detection with a pretrained YOLOv8n model on PyTorch. Detection is not yet connected to video, and tracking, ONNX export, GPU execution, and benchmarking are not implemented. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
+> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, and a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output. Annotated video output, tracking, ONNX export, GPU execution, and benchmarking are not implemented. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -25,7 +25,7 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Hardware / software environment report | ✅ | ✅ | n/a |
 | Video input (OpenCV, prerecorded files) | ✅ | ✅ | n/a |
 | Object detection — PyTorch backend (single image / frame) | ✅ | ✅ ¹ | — |
-| Detection on video frames (pipeline) | ✅ | — | — |
+| Detection on video frames (pipeline, summary, JSON export) | ✅ | ✅ ² | — |
 | ONNX export and numerical validation | ✅ | — | — |
 | Object detection — ONNX Runtime CPU | ✅ | — | — |
 | Object detection — ONNX Runtime CUDA (when available) | ✅ | — | — |
@@ -41,6 +41,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 
 ¹ Covered by mocked unit tests **and** by a real-model test (`yolov8n.pt` on CPU, Linux, PyTorch 2.14.1 CPU build, Ultralytics 8.4.178). The real test is opt-in; see [Tests](#tests). No speed or accuracy figures have been measured.
 
+² Covered by mocked unit tests, by integration tests with real OpenCV, and by an opt-in real-model test on a short video. The command was also run end to end with the real YOLOv8n model on a 113-frame, 1024×576 H.264 clip on Linux (CPU). Detection counts describe what the model output, not whether it was correct: the processing summary is neither an accuracy nor a speed measurement.
+
 **What exists today:**
 
 - An installable `edgevision` package (src layout) whose only required dependency is PyYAML.
@@ -50,6 +52,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - `scripts/inspect_video.py`: reports a video's metadata, how many frames could actually be decoded, and why reading stopped.
 - `edgevision.models`: a backend-independent `Detection` record (frame index, `xyxy` box in original-image pixels, confidence, class ID, class name; validated and immutable), shared `DetectionSettings` (input size, thresholds, class filter), a `Detector` protocol, and `PytorchYoloDetector`, which runs a pretrained Ultralytics YOLO model on one BGR frame with `auto` / `cpu` / `cuda` device selection. An explicit `cuda` request fails clearly instead of silently using the CPU.
 - `scripts/detect_image.py`: runs the detector on one image, prints the detections, and can save them as JSON.
+- `edgevision.pipeline`: `VideoDetectionPipeline` feeds every frame from `VideoReader` to an already-created detector, one frame at a time, yields per-frame results (`FrameDetections`), and keeps only counters for its `PipelineSummary`. `edgevision.results` streams those results to a JSON file that only appears once it is complete.
+- `scripts/detect_video.py`: runs detection over a video, prints a processing summary, and can save per-frame detections as JSON.
 - pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV, PyTorch and Ultralytics are replaced by fakes in unit tests. A few integration tests use real OpenCV when it is installed, and one opt-in test runs the real YOLOv8n model.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
@@ -124,6 +128,9 @@ edgevision/
 │       ├── config.py        # YAML loading and validation
 │       ├── device.py        # environment / hardware report
 │       ├── optional.py      # helpful errors for missing optional packages
+│       ├── cli.py           # option parsing shared by the detection commands
+│       ├── pipeline.py      # VideoReader -> Detector, per-frame results, summary
+│       ├── results.py       # streaming, atomic JSON output for video detections
 │       ├── models/
 │       │   ├── __init__.py
 │       │   ├── base.py      # Detection, DetectionSettings, Detector protocol
@@ -134,6 +141,7 @@ edgevision/
 ├── scripts/
 │   ├── README.md            # CLI entry points (implemented and planned)
 │   ├── detect_image.py      # run the detector on one image
+│   ├── detect_video.py      # run the detector on every frame of a video
 │   └── inspect_video.py     # report video metadata and decodable frames
 ├── tests/
 │   ├── README.md            # how to run tests; planned coverage
@@ -141,10 +149,13 @@ edgevision/
 │   ├── test_device.py
 │   ├── conftest.py          # fake PyTorch/Ultralytics used by detector tests
 │   ├── test_detect_image.py
+│   ├── test_detect_video.py
 │   ├── test_detection.py
 │   ├── test_inspect_video.py
 │   ├── test_package.py
+│   ├── test_pipeline.py
 │   ├── test_pytorch_backend.py
+│   ├── test_results.py
 │   └── test_video_reader.py
 ├── docs/
 │   ├── architecture.md      # planned components and data flow
@@ -159,7 +170,7 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (ONNX backend, export), `video/writer`, `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
+Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (ONNX backend, export), `video/writer`, `tracking/`, `benchmarks/` (timing, runner, metrics, report), and `evaluation/`.
 
 ## Planned benchmark methodology
 
@@ -241,6 +252,10 @@ python scripts/inspect_video.py data/input/sample.mp4 --max-frames 100
 # Detect objects in one image (first run downloads yolov8n.pt, ~6 MB, to models/)
 python scripts/detect_image.py path/to/photo.jpg
 python scripts/detect_image.py path/to/photo.jpg --device cpu --conf 0.4 --json results/photo.json
+
+# Detect objects in every frame of a video (summary only, or also per-frame JSON)
+python scripts/detect_video.py data/input/sample.mp4
+python scripts/detect_video.py data/input/sample.mp4 --max-frames 100 --json results/sample_detections.json
 ```
 
 `detect_image.py` takes its model, input size, thresholds and class filter from `configs/default.yaml`; `--model`, `--imgsz`, `--conf` and `--iou` override them. `--device` is `auto` (CUDA only if PyTorch can use it, otherwise CPU), `cpu`, or `cuda` (fails with an explanation if CUDA is unavailable). `--json` refuses to replace an existing file unless `--overwrite` is given. Exit status is 0 on success, 1 if the image, model or inference fails, and 2 for invalid arguments.
@@ -278,9 +293,36 @@ Records are validated when created (finite numbers, confidence in range, non-neg
 
 `PytorchYoloDetector` validates inputs and settings, selects the device, calls Ultralytics, and converts its output. Ultralytics does the computer vision itself: letterbox resizing, BGR to RGB conversion, the forward pass, non-maximum suppression, and scaling boxes back to the original frame.
 
+#### The video detection pipeline
+
+```mermaid
+flowchart LR
+    V[/Video file/] --> R[VideoReader<br/>one BGR frame at a time]
+    R -->|frame, frame_index| D[Detector.detect<br/>PytorchYoloDetector]
+    D -->|list of Detection| F[FrameDetections<br/>per frame, in order]
+    F --> S[PipelineSummary<br/>counts only]
+    F -.->|optional| J[(JSON file<br/>streamed, atomic)]
+```
+
+`VideoDetectionPipeline` connects existing parts and adds no computer vision of its own. The reader hands each decoded frame and its zero-based index to `detector.detect(frame, frame_index=...)`. The detector is created once by the caller and reused for every frame. Each frame's detections come back tagged with that same index, and the pipeline rejects any that are not. Results are yielded frame by frame and not stored, so memory use does not grow with video length. The video is released when processing ends, fails, or is stopped early.
+
+`detect_video.py` uses the same defaults and options as `detect_image.py` (model, `--device`, `--conf`, `--iou`, `--imgsz` from `configs/default.yaml`). It also takes the video path and frame limit from the config's `video` section: `--max-frames N` overrides the limit and `--all-frames` removes it. It prints a progress line every 25 frames (`--quiet` to hide), then a **processing summary**:
+
+| Field | Meaning |
+|-------|---------|
+| Frames processed | Frames decoded and passed through the detector |
+| Stopped because | End of video, or the frame limit |
+| Frames with / without detections | Always add up to frames processed |
+| Total detections | Sum of all detection records; equals the sum of the per-class counts |
+| Detections by class | How many records each class name received |
+
+The summary describes what the model *output*. It is not an accuracy measurement (there are no ground-truth labels yet) and not a performance benchmark (no timing is measured).
+
+`--json PATH` saves every processed frame, including frames with no detections, plus video metadata, detector settings and the summary. The schema is `edgevision.video_detections` version 1, documented in [`results/README.md`](results/README.md). The file is streamed to `PATH.partial` and renamed to `PATH` only after the summary is written. A failed or interrupted run (Ctrl+C) therefore never leaves a file that looks complete, and an existing file is only replaced with `--overwrite`. Exit status: 0 success, 1 failure, 2 invalid arguments, 130 interrupted.
+
 #### Tests
 
-`python -m pytest` runs unit tests in which OpenCV, PyTorch and Ultralytics are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. One additional test runs the genuine YOLOv8n model on a photo bundled with Ultralytics. It is opt-in, and needs the `detector` extra and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
+`python -m pytest` runs unit tests in which OpenCV, PyTorch and Ultralytics are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Two additional tests run the genuine YOLOv8n model: one on a photo bundled with Ultralytics, one on a short video built from that photo. They are opt-in, and needs the `detector` extra and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
 
 ```bash
 # Linux / macOS
@@ -329,7 +371,7 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [ ] Device and execution-provider selection for inference backends
 - [x] Video reader with frame limit and robust error handling
 - [x] Detection interface and PyTorch detection backend (single frame)
-- [ ] Run detection on video frames
+- [x] Run detection on video frames, with processing summary and JSON export
 - [ ] Annotated video output
 - [ ] Multi-object tracking with ByteTrack
 - [ ] ONNX export with output-shape, finite-value, and numerical-agreement checks
@@ -347,7 +389,8 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 
 ## Known limitations
 
-- Detection runs on single images or frames only; it is not yet connected to the video reader, and there is no tracking, annotated output, ONNX backend, or benchmarking.
+- There is no annotated video output, tracking, ONNX backend, or benchmarking yet.
+- Detections are not checked against ground truth, so nothing here measures accuracy. On a short cat clip, YOLOv8n labelled many objects as other classes (for example "potted plant" and "dog"), which is a reminder that detection counts are not correctness.
 - Real model inference has been verified on Linux (CPU). GPU (CUDA) inference has not been tested: no NVIDIA GPU was available.
 - The first use of an official model name (e.g. `yolov8n.pt`) needs an internet connection to download the weights.
 - Video metadata is what the file *reports*; the frame count in particular can be missing or wrong. OpenCV signals the end of a video and an undecodable frame the same way, so a corrupt file may simply end early (the inspection command flags this when the reported count is larger).

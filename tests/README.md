@@ -12,7 +12,7 @@ The suite needs no GPU, no network access, no downloaded models, and none of the
 
 A few **integration tests** use real OpenCV to write and read back a tiny synthetic video. Install the `vision` extra (`python -m pip install -e ".[dev,vision]"`) to run them; without it they are reported as *skipped* with the reason, and every other test still runs.
 
-**Mocked tests are not real inference.** They check EdgeVision's own code around the model. One opt-in test (marker `model`) runs the genuine pretrained YOLOv8n on CPU, using `bus.jpg`, which ships inside the Ultralytics package. It needs the `detector` extra and an existing `models/yolov8n.pt` (it never downloads):
+**Mocked tests are not real inference.** They check EdgeVision's own code around the model. Two opt-in tests (marker `model`) run the genuine pretrained YOLOv8n on CPU: one on `bus.jpg`, which ships inside the Ultralytics package, and one on a short video built from it. They need the `detector` extra and an existing `models/yolov8n.pt` (they never download):
 
 ```bash
 EDGEVISION_RUN_MODEL_TESTS=1 python -m pytest -m model -v      # Linux / macOS
@@ -32,6 +32,9 @@ On Windows Command Prompt: `set EDGEVISION_RUN_MODEL_TESTS=1`, then `python -m p
 | `test_detection.py` | `Detection` validation (coordinates, confidence, IDs, names, booleans), `DetectionSettings` validation and sync with the default config, frame validation |
 | `test_pytorch_backend.py` | Arguments passed to Ultralytics, output conversion, frame-index propagation, empty results, invalid inputs, device selection (including CUDA requested but unavailable), load/inference failures, missing packages, closing; plus the opt-in real-model test |
 | `test_detect_image.py` | `scripts/detect_image.py`: arguments, config defaults and overrides, output, JSON export and overwrite protection, failure exit codes |
+| `test_pipeline.py` | Frame order and indices reaching the detector, aggregation and summary consistency, frames/videos without detections, empty video, `max_frames`, detector failures with context, contract checks, video released on success/failure/early stop; integration with the real `VideoReader`; opt-in real-model video test |
+| `test_results.py` | JSON schema, parseable output, `.partial`-then-rename behaviour, no file after errors, overwrite protection, invalid values rejected |
+| `test_detect_video.py` | `scripts/detect_video.py`: arguments, config defaults vs `--max-frames`/`--all-frames`, summary, JSON contents, overwrite protection, inference failure and Ctrl+C leave no results file |
 
 ## Planned coverage
 

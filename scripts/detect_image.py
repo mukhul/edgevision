@@ -21,7 +21,13 @@ from pathlib import Path
 from typing import Any
 
 import edgevision
-from edgevision.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
+from edgevision.cli import (
+    add_detector_arguments,
+    describe_settings,
+    detection_settings,
+    model_name,
+)
+from edgevision.config import ConfigError, load_config
 from edgevision.models import Detection, DetectionSettings, DetectorError, PytorchYoloDetector
 from edgevision.optional import MissingDependencyError, import_optional
 
@@ -40,26 +46,6 @@ class ImageError(Exception):
 # --- argument parsing --------------------------------------------------------
 
 
-def fraction(text: str) -> float:
-    try:
-        value = float(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"must be a number between 0 and 1, got {text!r}") from None
-    if not 0.0 <= value <= 1.0:
-        raise argparse.ArgumentTypeError(f"must be between 0 and 1, got {value}")
-    return value
-
-
-def positive_int(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"must be a positive integer, got {text!r}") from None
-    if value < 1:
-        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value}")
-    return value
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python scripts/detect_image.py",
@@ -68,20 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("image", type=Path, help="image file (JPEG, PNG, BMP, ...)")
-    parser.add_argument("--model", help="model name or .pt path (default: model.weights from the config)")
-    parser.add_argument(
-        "--device", choices=["auto", "cpu", "cuda"], default="auto",
-        help="compute device (default: auto = CUDA if PyTorch can use it, else CPU)",
-    )
-    parser.add_argument("--conf", type=fraction, help="confidence threshold 0-1 (default: from config)")
-    parser.add_argument("--iou", type=fraction, help="NMS IoU threshold 0-1 (default: from config)")
-    parser.add_argument(
-        "--imgsz", type=positive_int, help="model input size, multiple of 32 (default: from config)"
-    )
-    parser.add_argument(
-        "--config", type=Path, default=DEFAULT_CONFIG_PATH,
-        help=f"config file supplying defaults (default: {DEFAULT_CONFIG_PATH.as_posix()})",
-    )
+    add_detector_arguments(parser)
     parser.add_argument("--json", type=Path, metavar="PATH", help="also write the results to this JSON file")
     parser.add_argument("--overwrite", action="store_true", help="allow --json to replace an existing file")
     return parser
@@ -114,12 +87,10 @@ def format_summary(
     settings: DetectionSettings,
     detections: list[Detection],
 ) -> str:
-    classes = "all" if settings.classes is None else ", ".join(map(str, settings.classes))
     lines = [
         f"Image        {image_path} ({image_size[0]} x {image_size[1]} px)",
         f"Model        {model} (PyTorch via Ultralytics, device: {device})",
-        f"Settings     input size {settings.input_size}, confidence >= {settings.conf_threshold}, "
-        f"NMS IoU {settings.iou_threshold}, classes: {classes}",
+        f"Settings     {describe_settings(settings)}",
         f"Detections   {len(detections)}",
     ]
     if detections:
@@ -148,12 +119,7 @@ def results_document(
         "image_size": {"width": image_size[0], "height": image_size[1]},
         "model": model,
         "device": device,
-        "settings": {
-            "input_size": settings.input_size,
-            "conf_threshold": settings.conf_threshold,
-            "iou_threshold": settings.iou_threshold,
-            "classes": None if settings.classes is None else list(settings.classes),
-        },
+        "settings": settings.to_dict(),
         "bbox_format": "xyxy, original image pixels",
         "detections": [d.to_dict() for d in detections],
     }
@@ -169,15 +135,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     try:
-        settings = DetectionSettings(
-            input_size=args.imgsz if args.imgsz is not None else model_config.input_size,
-            conf_threshold=args.conf if args.conf is not None else model_config.conf_threshold,
-            iou_threshold=args.iou if args.iou is not None else model_config.iou_threshold,
-            classes=model_config.classes,
-        )
+        settings = detection_settings(args, model_config)
     except ValueError as exc:
         parser.error(str(exc))  # exits with status 2
-    model = args.model or model_config.weights.as_posix()
+    model = model_name(args, model_config)
 
     if args.json is not None and args.json.exists() and not args.overwrite:
         print(f"ERROR: {args.json} already exists; pass --overwrite to replace it.", file=sys.stderr)
