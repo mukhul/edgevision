@@ -270,7 +270,7 @@ def find_warnings(env: dict[str, Any]) -> list[str]:
             "More than one OpenCV package is installed ("
             + ", ".join(opencv_distributions)
             + "). They all provide the same cv2 module and overwrite each other: uninstall all "
-            "of them, then install exactly one (EdgeVision uses opencv-python-headless)."
+            "of them, then install exactly one (EdgeVision uses opencv-python)."
         )
 
     torch, ort = env["torch"], env["onnxruntime"]

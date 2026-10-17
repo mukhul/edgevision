@@ -202,7 +202,7 @@ def test_conflicting_onnxruntime_packages_are_flagged(bare_machine: pytest.Monke
 
 
 def test_conflicting_opencv_packages_are_flagged(bare_machine: pytest.MonkeyPatch) -> None:
-    # e.g. Ultralytics pulls in opencv-python next to our opencv-python-headless
+    # e.g. a leftover opencv-python-headless next to the opencv-python that Ultralytics needs
     versions = {"opencv-python": "4.14.0.94", "opencv-python-headless": "4.14.0.94"}
     bare_machine.setattr(device, "_installed_version", versions.get)
 

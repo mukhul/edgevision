@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Only the project foundation and video input exist so far: an installable package, validated configuration loading, an environment report, and a frame-by-frame video reader. No detection, tracking, ONNX export, GPU execution, or benchmarking is implemented, and **no benchmark results have been recorded**. Everything described below as *planned* is the design target, not existing functionality.
+> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, and single-image object detection with a pretrained YOLOv8n model on PyTorch. Detection is not yet connected to video, and tracking, ONNX export, GPU execution, and benchmarking are not implemented. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -24,7 +24,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Configuration loading and validation | ✅ | ✅ | n/a |
 | Hardware / software environment report | ✅ | ✅ | n/a |
 | Video input (OpenCV, prerecorded files) | ✅ | ✅ | n/a |
-| Object detection — PyTorch backend | ✅ | — | — |
+| Object detection — PyTorch backend (single image / frame) | ✅ | ✅ ¹ | — |
+| Detection on video frames (pipeline) | ✅ | — | — |
 | ONNX export and numerical validation | ✅ | — | — |
 | Object detection — ONNX Runtime CPU | ✅ | — | — |
 | Object detection — ONNX Runtime CUDA (when available) | ✅ | — | — |
@@ -38,6 +39,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - **Implemented** — exists in this repository and is covered by passing tests.
 - **Benchmarked** — measured, with results and configuration recorded in [`docs/experiment_log.md`](docs/experiment_log.md).
 
+¹ Covered by mocked unit tests **and** by a real-model test (`yolov8n.pt` on CPU, Linux, PyTorch 2.14.1 CPU build, Ultralytics 8.4.178). The real test is opt-in; see [Tests](#tests). No speed or accuracy figures have been measured.
+
 **What exists today:**
 
 - An installable `edgevision` package (src layout) whose only required dependency is PyYAML.
@@ -45,7 +48,9 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - `edgevision.device`: reports Python, OS, CPU, NVIDIA GPU hardware (via `nvidia-smi`), optional packages, PyTorch CUDA support and ONNX Runtime execution providers. It works when PyTorch and ONNX Runtime are not installed, and keeps "a GPU is present" separate from "a framework can use it".
 - `edgevision.video.VideoReader`: reads a prerecorded video one frame at a time (BGR, zero-based indices), with an optional `max_frames` limit, defensive metadata handling (width, height, FPS, reported frame count, codec) and guaranteed release of the OpenCV capture. OpenCV is an optional extra (`vision`).
 - `scripts/inspect_video.py`: reports a video's metadata, how many frames could actually be decoded, and why reading stopped.
-- pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV is replaced by a fake in unit tests, and a few integration tests use real OpenCV on a synthetic video when it is installed.
+- `edgevision.models`: a backend-independent `Detection` record (frame index, `xyxy` box in original-image pixels, confidence, class ID, class name; validated and immutable), shared `DetectionSettings` (input size, thresholds, class filter), a `Detector` protocol, and `PytorchYoloDetector`, which runs a pretrained Ultralytics YOLO model on one BGR frame with `auto` / `cpu` / `cuda` device selection. An explicit `cuda` request fails clearly instead of silently using the CPU.
+- `scripts/detect_image.py`: runs the detector on one image, prints the detections, and can save them as JSON.
+- pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV, PyTorch and Ultralytics are replaced by fakes in unit tests. A few integration tests use real OpenCV when it is installed, and one opt-in test runs the real YOLOv8n model.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
 ## Intended scope
@@ -118,18 +123,28 @@ edgevision/
 │       ├── __init__.py      # package marker and version
 │       ├── config.py        # YAML loading and validation
 │       ├── device.py        # environment / hardware report
+│       ├── optional.py      # helpful errors for missing optional packages
+│       ├── models/
+│       │   ├── __init__.py
+│       │   ├── base.py      # Detection, DetectionSettings, Detector protocol
+│       │   └── pytorch_backend.py  # PytorchYoloDetector (Ultralytics YOLO)
 │       └── video/
 │           ├── __init__.py
 │           └── reader.py    # frame-by-frame video reading (OpenCV)
 ├── scripts/
 │   ├── README.md            # CLI entry points (implemented and planned)
+│   ├── detect_image.py      # run the detector on one image
 │   └── inspect_video.py     # report video metadata and decodable frames
 ├── tests/
 │   ├── README.md            # how to run tests; planned coverage
 │   ├── test_config.py
 │   ├── test_device.py
+│   ├── conftest.py          # fake PyTorch/Ultralytics used by detector tests
+│   ├── test_detect_image.py
+│   ├── test_detection.py
 │   ├── test_inspect_video.py
 │   ├── test_package.py
+│   ├── test_pytorch_backend.py
 │   └── test_video_reader.py
 ├── docs/
 │   ├── architecture.md      # planned components and data flow
@@ -139,12 +154,12 @@ edgevision/
 │   ├── README.md
 │   └── input/               # local videos (git-ignored)
 ├── models/
-│   └── README.md            # local weights and ONNX exports (git-ignored)
+│   └── README.md            # local weights (yolov8n.pt) and ONNX exports (git-ignored)
 └── results/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (backend interface, PyTorch backend, ONNX backend, export), `video/writer`, `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
+Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (ONNX backend, export), `video/writer`, `tracking/`, `benchmarks/` (timing, runner, metrics, report), `evaluation/`, and `pipeline`.
 
 ## Planned benchmark methodology
 
@@ -165,6 +180,14 @@ Requires Python 3.11 or newer. Run all commands from the repository root.
 
 ### Available now
 
+Optional extras keep the base install light. Install only what you need:
+
+| Extra | Installs | Needed for |
+|-------|----------|------------|
+| `dev` | pytest, NumPy | running the tests |
+| `vision` | `opencv-python` | reading video and images |
+| `detector` | Ultralytics, PyTorch (and torchvision via Ultralytics) | YOLO object detection |
+
 Windows (PowerShell):
 
 ```powershell
@@ -173,10 +196,10 @@ cd edgevision
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,vision]"   # vision = OpenCV, needed for video
+python -m pip install -e ".[dev,vision,detector]"
 ```
 
-If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use Command Prompt with `.venv\Scripts\activate.bat`.
+If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use Command Prompt with `.venv\Scripts\activate.bat`. On Windows the default PyPI `torch` wheel is the CPU-only build, which is what a laptop without an NVIDIA GPU needs.
 
 Linux / macOS:
 
@@ -186,8 +209,22 @@ cd edgevision
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,vision]"   # vision = OpenCV, needed for video
+# Linux without an NVIDIA GPU: install the much smaller CPU-only PyTorch build first
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[dev,vision,detector]"
 ```
+
+On Linux the default PyPI `torch` wheel is a large CUDA build; the extra line above avoids it. macOS wheels from PyPI are CPU/MPS builds. No CUDA-specific PyTorch build is pinned by this project.
+
+> [!WARNING]
+> **One OpenCV package only.** `opencv-python` and `opencv-python-headless` both install the same `cv2` module and silently overwrite each other. EdgeVision uses `opencv-python` because Ultralytics requires it. If an environment created before the detector was added still has `opencv-python-headless`, uninstall **both** and reinstall:
+>
+> ```bash
+> python -m pip uninstall -y opencv-python-headless opencv-python
+> python -m pip install -e ".[dev,vision,detector]"
+> ```
+>
+> `python -m edgevision.device` warns if more than one OpenCV package is installed.
 
 Then:
 
@@ -200,13 +237,18 @@ python -m pytest                     # run the test suite
 # Report a video's metadata and how many frames can be decoded
 python scripts/inspect_video.py data/input/sample.mp4
 python scripts/inspect_video.py data/input/sample.mp4 --max-frames 100
+
+# Detect objects in one image (first run downloads yolov8n.pt, ~6 MB, to models/)
+python scripts/detect_image.py path/to/photo.jpg
+python scripts/detect_image.py path/to/photo.jpg --device cpu --conf 0.4 --json results/photo.json
 ```
 
-The `vision` extra installs `opencv-python-headless` (OpenCV without GUI functions). Do not also install `opencv-python`: both provide the same `cv2` module and conflict; `python -m edgevision.device` warns if more than one OpenCV package is present. Without the `vision` extra the package and tests still work, and the video integration tests are skipped with a reason.
+`detect_image.py` takes its model, input size, thresholds and class filter from `configs/default.yaml`; `--model`, `--imgsz`, `--conf` and `--iou` override them. `--device` is `auto` (CUDA only if PyTorch can use it, otherwise CPU), `cpu`, or `cuda` (fails with an explanation if CUDA is unavailable). `--json` refuses to replace an existing file unless `--overwrite` is given. Exit status is 0 on success, 1 if the image, model or inference fails, and 2 for invalid arguments.
 
-Reading video from Python:
+Reading video and detecting objects from Python:
 
 ```python
+from edgevision.models import DetectionSettings, PytorchYoloDetector
 from edgevision.video import VideoReader
 
 with VideoReader("data/input/sample.mp4", max_frames=100) as reader:
@@ -214,9 +256,48 @@ with VideoReader("data/input/sample.mp4", max_frames=100) as reader:
     for frame_index, frame in reader:  # frame: BGR uint8 array, shape (height, width, 3)
         ...
 print(reader.frames_read, reader.stop_reason)  # e.g. 100 StopReason.MAX_FRAMES
+
+settings = DetectionSettings(input_size=640, conf_threshold=0.25, iou_threshold=0.7)
+with PytorchYoloDetector("models/yolov8n.pt", device="auto", settings=settings) as detector:
+    for d in detector.detect(frame, frame_index=0):  # any BGR uint8 frame
+        print(d.class_name, round(d.confidence, 2), d.bbox_xyxy)  # box in original-image pixels
 ```
 
-PyTorch, ONNX Runtime and Ultralytics are **not** installed by this package yet. The environment report lists them as missing until the stages that need them add their (CPU and GPU) installation instructions.
+#### The detection interface
+
+Every backend returns the same `Detection` records, so later stages (tracking, drawing, evaluation, PyTorch-vs-ONNX comparison) never depend on library-specific output:
+
+| Field | Meaning |
+|-------|---------|
+| `frame_index` | Zero-based index of the frame the detection came from |
+| `bbox_xyxy` | `(x1, y1, x2, y2)`: top-left and bottom-right corners in pixels of the **original** frame (not the resized model input) |
+| `confidence` | Score in `[0, 1]` after non-maximum suppression |
+| `class_id`, `class_name` | Model class index and label, e.g. `15`, `"cat"` (COCO classes for the pretrained model) |
+
+Records are validated when created (finite numbers, confidence in range, non-negative integer IDs, `x1 <= x2` and `y1 <= y2`, non-empty name) and cannot be modified afterwards. Input frames must be `uint8` arrays of shape `(height, width, 3)` in OpenCV's **BGR** order.
+
+`PytorchYoloDetector` validates inputs and settings, selects the device, calls Ultralytics, and converts its output. Ultralytics does the computer vision itself: letterbox resizing, BGR to RGB conversion, the forward pass, non-maximum suppression, and scaling boxes back to the original frame.
+
+#### Tests
+
+`python -m pytest` runs unit tests in which OpenCV, PyTorch and Ultralytics are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. One additional test runs the genuine YOLOv8n model on a photo bundled with Ultralytics. It is opt-in, and needs the `detector` extra and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
+
+```bash
+# Linux / macOS
+EDGEVISION_RUN_MODEL_TESTS=1 python -m pytest -m model -v
+```
+
+```bat
+:: Windows Command Prompt
+set EDGEVISION_RUN_MODEL_TESTS=1
+python -m pytest -m model -v
+```
+
+#### Ultralytics notes
+
+- Ultralytics creates a settings file on first import (for example `%APPDATA%\Ultralytics\settings.json` on Windows, `~/.config/Ultralytics/settings.json` on Linux).
+- With its default setting `sync: true`, Ultralytics sends anonymous usage events for runs such as prediction when online. To opt out: `yolo settings sync=False`.
+- Ultralytics and its pretrained weights are licensed under AGPL-3.0.
 
 ### Planned interface
 
@@ -247,7 +328,8 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [x] Hardware / software environment report
 - [ ] Device and execution-provider selection for inference backends
 - [x] Video reader with frame limit and robust error handling
-- [ ] PyTorch detection backend
+- [x] Detection interface and PyTorch detection backend (single frame)
+- [ ] Run detection on video frames
 - [ ] Annotated video output
 - [ ] Multi-object tracking with ByteTrack
 - [ ] ONNX export with output-shape, finite-value, and numerical-agreement checks
@@ -265,7 +347,9 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 
 ## Known limitations
 
-- No perception, inference, or benchmarking code exists yet; only configuration, environment reporting, and video reading work.
+- Detection runs on single images or frames only; it is not yet connected to the video reader, and there is no tracking, annotated output, ONNX backend, or benchmarking.
+- Real model inference has been verified on Linux (CPU). GPU (CUDA) inference has not been tested: no NVIDIA GPU was available.
+- The first use of an official model name (e.g. `yolov8n.pt`) needs an internet connection to download the weights.
 - Video metadata is what the file *reports*; the frame count in particular can be missing or wrong. OpenCV signals the end of a video and an undecodable frame the same way, so a corrupt file may simply end early (the inspection command flags this when the reported count is larger).
 - `configs/default.yaml` is validated but not yet used by any pipeline stage; fields may still change as those stages are built.
 - The environment report shows what the installed frameworks *offer*. Whether inference really runs on a GPU will only be verified once the inference backends exist.

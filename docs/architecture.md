@@ -1,6 +1,6 @@
 # Architecture (planned)
 
-> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), and **Video input** (`video/reader.py`). Device *selection* and every other component below are planned.
+> **Status:** mostly a design document. Implemented so far: **Configuration** (`config.py`), the environment-report part of **Device detection** (`device.py`), **Video input** (`video/reader.py`), the **Backend interface** (`models/base.py`) and the **PyTorch backend** (`models/pytorch_backend.py`, single frames; its own `auto`/`cpu`/`cuda` device selection). Every other component below, including connecting detection to video, is planned.
 
 ## Data flow
 
@@ -34,8 +34,8 @@ flowchart LR
 | Device detection | `device.py` | Report Python, PyTorch, OpenCV, ONNX Runtime, OS, CPU, GPU and CUDA details; list available execution providers; select a device without silently changing a requested one |
 | Video input | `video/reader.py` | Open a video, stream frames sequentially, expose FPS/size/frame count, apply a frame limit, raise clear errors for missing or corrupt files |
 | Video output | `video/writer.py` | Write annotated frames; always release resources, including on error |
-| Backend interface | `models/base.py` | Common interface shared by all inference backends |
-| PyTorch backend | `models/pytorch_backend.py` | Load pretrained weights, run in eval mode with gradients disabled, CPU or CUDA |
+| Backend interface | `models/base.py` | `Detection` record, shared `DetectionSettings` (input size, thresholds, class filter), `Detector` protocol (`detect(frame, frame_index) -> list[Detection]`), frame validation, detector error types |
+| PyTorch backend | `models/pytorch_backend.py` | `PytorchYoloDetector`: load pretrained Ultralytics YOLO weights, choose `auto`/`cpu`/`cuda` (never silently downgrading an explicit CUDA request), run Ultralytics' preprocessing, inference and NMS, convert results to `Detection` records |
 | ONNX backend | `models/onnx_backend.py` | Run the exported model with ONNX Runtime; verify which execution provider was actually selected |
 | Export | `models/export.py` | Export weights to ONNX with a documented opset; check loading, output shapes, finite values, and numerical agreement with PyTorch |
 | Tracking | `tracking/tracker.py` | Wrap an existing ByteTrack implementation; assign persistent track IDs; kept separate from detection |
@@ -47,12 +47,14 @@ Module names follow the long-term plan and may change if there is a clear techni
 
 ## Detection record contract
 
+Implemented as the frozen dataclass `edgevision.models.Detection`; values are validated when a record is created.
+
 Every backend will return the same record format so downstream stages (tracking, evaluation, comparison) are backend-agnostic:
 
 | Field | Type | Convention |
 |-------|------|------------|
 | `frame_index` | int | 0-based index in the source video |
-| `bbox` | 4 floats | `x1, y1, x2, y2` in source-frame pixel coordinates |
+| `bbox_xyxy` | 4 floats | `x1, y1, x2, y2` in source-frame pixel coordinates, `x1 <= x2`, `y1 <= y2` |
 | `confidence` | float | Post-NMS score in `[0, 1]` |
 | `class_id` | int | Model class index |
 | `class_name` | str | Human-readable class label |

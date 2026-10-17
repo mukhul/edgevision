@@ -26,14 +26,25 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0,<10",
+    "numpy>=1.26",   # tests build synthetic image frames
 ]
-# Video decoding. The headless build has no GUI (no cv2.imshow), which is all
-# EdgeVision needs and avoids GUI system libraries. Do not install it next to
-# opencv-python: both provide the same `cv2` module and overwrite each other.
-# 4.10.0.84 is the first release built for NumPy 2; OpenCV 5 is capped out
-# until it has been tested with the rest of the stack.
+# Video decoding. We use the regular opencv-python package because Ultralytics
+# (the `detector` extra) requires exactly that distribution. Never install
+# opencv-python-headless alongside it: both provide the same `cv2` module and
+# overwrite each other's files. 4.10.0.84 is the first release built for
+# NumPy 2; 4.13.0.90 is excluded by Ultralytics; OpenCV 5 is capped out until
+# it has been tested with Ultralytics.
 vision = [
-    "opencv-python-headless>=4.10.0.84,<5",
+    "opencv-python>=4.10.0.84,!=4.13.0.90,<5",
+]
+# Pretrained YOLO detection with PyTorch. On Windows and macOS the default
+# PyPI torch wheel is CPU-only; on Linux it is a large CUDA build (see README
+# for installing the CPU build instead). No CUDA-specific build is pinned.
+# Weights are NOT downloaded at install time: an official model such as
+# yolov8n.pt is fetched by Ultralytics the first time a detector loads it.
+detector = [
+    "ultralytics>=8.4,<9",
+    "torch>=2.2,<3",
 ]
 
 [tool.setuptools.dynamic]
@@ -45,3 +56,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"   # summarise skipped/failed tests at the end of every run
+markers = [
+    "model: runs a real pretrained model; opt-in with EDGEVISION_RUN_MODEL_TESTS=1",
+]

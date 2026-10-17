@@ -8,9 +8,17 @@ python -m pytest -v         # one line per test
 python -m pytest tests/test_config.py
 ```
 
-The suite needs no GPU, no network access, no downloaded models, and none of the optional ML packages. PyTorch, ONNX Runtime, OpenCV and `nvidia-smi` are replaced with small fakes where a test needs them.
+The suite needs no GPU, no network access, no downloaded models, and none of the optional ML packages. PyTorch, ONNX Runtime, OpenCV, Ultralytics and `nvidia-smi` are replaced with small fakes where a test needs them (the shared fake YOLO model is in `conftest.py`).
 
 A few **integration tests** use real OpenCV to write and read back a tiny synthetic video. Install the `vision` extra (`python -m pip install -e ".[dev,vision]"`) to run them; without it they are reported as *skipped* with the reason, and every other test still runs.
+
+**Mocked tests are not real inference.** They check EdgeVision's own code around the model. One opt-in test (marker `model`) runs the genuine pretrained YOLOv8n on CPU, using `bus.jpg`, which ships inside the Ultralytics package. It needs the `detector` extra and an existing `models/yolov8n.pt` (it never downloads):
+
+```bash
+EDGEVISION_RUN_MODEL_TESTS=1 python -m pytest -m model -v      # Linux / macOS
+```
+
+On Windows Command Prompt: `set EDGEVISION_RUN_MODEL_TESTS=1`, then `python -m pytest -m model -v`. `EDGEVISION_MODEL_WEIGHTS` can point to weights elsewhere.
 
 ## Current coverage
 
@@ -21,13 +29,14 @@ A few **integration tests** use real OpenCV to write and read back a tiny synthe
 | `test_device.py` | The environment report runs without optional packages; CUDA/provider detection, broken installs, `nvidia-smi` parsing and failures, and setup warnings |
 | `test_video_reader.py` | Missing/directory/unopenable/undecodable inputs, metadata (including invalid values), frame order and indices, `max_frames`, end of video, capture release on every exit path, missing or broken OpenCV; plus integration tests on a synthetic video |
 | `test_inspect_video.py` | `scripts/inspect_video.py` as a real command: usage, exit codes, error messages, metadata and stop-reason output |
+| `test_detection.py` | `Detection` validation (coordinates, confidence, IDs, names, booleans), `DetectionSettings` validation and sync with the default config, frame validation |
+| `test_pytorch_backend.py` | Arguments passed to Ultralytics, output conversion, frame-index propagation, empty results, invalid inputs, device selection (including CUDA requested but unavailable), load/inference failures, missing packages, closing; plus the opt-in real-model test |
+| `test_detect_image.py` | `scripts/detect_image.py`: arguments, config defaults and overrides, output, JSON export and overwrite protection, failure exit codes |
 
 ## Planned coverage
 
-- Detection output shape and coordinate conventions
 - ONNX model loading and PyTorch/ONNX output comparison
 - Latency aggregation, percentiles, and FPS calculations
-- Empty-detection handling
 - Tracker integration
 - Annotated output video creation
 - Benchmark result serialization

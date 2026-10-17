@@ -27,7 +27,6 @@ Design notes:
 from __future__ import annotations
 
 import enum
-import importlib
 import logging
 import math
 import numbers
@@ -41,17 +40,22 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 if TYPE_CHECKING:  # only for type checkers; NumPy is not needed to import this module
     import numpy as np
 
+from edgevision.optional import MissingDependencyError, import_optional
+
 logger = logging.getLogger(__name__)
 
-INSTALL_HINT = 'python -m pip install -e ".[vision]"'
+__all__ = [
+    "Frame",
+    "MissingDependencyError",  # re-exported: defined in edgevision.optional
+    "StopReason",
+    "VideoError",
+    "VideoMetadata",
+    "VideoReader",
+]
 
 
 class VideoError(Exception):
     """A video file could not be found, opened, or decoded."""
-
-
-class MissingDependencyError(ImportError):
-    """An optional dependency needed for this feature is not installed."""
 
 
 class StopReason(enum.StrEnum):
@@ -99,17 +103,7 @@ class Frame(NamedTuple):
 
 def _load_cv2() -> Any:
     """Import OpenCV, turning a missing or broken install into an actionable error."""
-    try:
-        return importlib.import_module("cv2")
-    except ImportError as exc:
-        if getattr(exc, "name", None) == "cv2":
-            raise MissingDependencyError(
-                f"OpenCV is required to read video but is not installed. Install it with: {INSTALL_HINT}"
-            ) from exc
-        raise MissingDependencyError(
-            f"OpenCV is installed but could not be imported ({exc}). "
-            f"Try reinstalling it with: {INSTALL_HINT}"
-        ) from exc
+    return import_optional("cv2", display_name="OpenCV", extra="vision", purpose="read video")
 
 
 def _validate_path(path: Any) -> Path:
