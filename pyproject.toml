@@ -53,6 +53,16 @@ tracking = [
     "ultralytics>=8.4,<9",
     "lap>=0.5.12,<0.6",
 ]
+# ONNX export and validation (install together with `detector`, which provides
+# Ultralytics and PyTorch). These are exactly the packages Ultralytics' ONNX
+# exporter checks for: onnx always; onnxslim and an ONNX Runtime package when
+# simplifying (the default). Ultralytics would pip-install any that are
+# missing at export time, so they are declared here and checked beforehand.
+export = [
+    "onnx>=1.12,<2",
+    "onnxslim>=0.1.82,<0.2",
+    "onnxruntime>=1.20,<2",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "edgevision.__version__" }

@@ -8,11 +8,11 @@ python -m pytest -v         # one line per test
 python -m pytest tests/test_config.py
 ```
 
-The suite needs no GPU, no network access, no downloaded models, and none of the optional ML packages. PyTorch, ONNX Runtime, OpenCV, Ultralytics and `nvidia-smi` are replaced with small fakes where a test needs them (the shared fake YOLO model is in `conftest.py`).
+The suite needs no GPU, no network access, no downloaded models, and none of the optional ML packages. PyTorch, ONNX, ONNX Runtime, OpenCV, Ultralytics and `nvidia-smi` are replaced with small fakes where a test needs them (the shared fake YOLO model is in `conftest.py`).
 
-A few **integration tests** use real OpenCV to write and read back a tiny synthetic video. Install the `vision` extra (`python -m pip install -e ".[dev,vision]"`) to run them; without it they are reported as *skipped* with the reason, and every other test still runs.
+A few **integration tests** use real OpenCV to write and read back a tiny synthetic video. Install the `vision` extra (`python -m pip install -e ".[dev,vision]"`) to run them; without it they are reported as *skipped* with the reason, and every other test still runs. Likewise, ONNX validation tests on small real ONNX files need the `export` extra and are skipped without it (a fake `onnx` module covers the same logic either way).
 
-**Mocked tests are not real inference.** They check EdgeVision's own code around the model. Three opt-in tests (marker `model`) run the genuine pretrained YOLOv8n on CPU: on `bus.jpg`, which ships inside the Ultralytics package, on a short video built from it, and on that video with real ByteTrack (the bus must keep one track ID). They need the `detector` extra and an existing `models/yolov8n.pt` (they never download):
+**Mocked tests are not real inference.** They check EdgeVision's own code around the model. Four opt-in tests (marker `model`) use the genuine pretrained YOLOv8n on CPU: on `bus.jpg`, which ships inside the Ultralytics package, on a short video built from it, on that video with real ByteTrack (the bus must keep one track ID), and a real ONNX export at 320×320 into a temporary folder followed by validation. They need the `detector` extra (plus `tracking` / `export` for those tests) and an existing `models/yolov8n.pt` (they never download):
 
 ```bash
 EDGEVISION_RUN_MODEL_TESTS=1 python -m pytest -m model -v      # Linux / macOS
@@ -37,11 +37,14 @@ On Windows Command Prompt: `set EDGEVISION_RUN_MODEL_TESTS=1`, then `python -m p
 | `test_detect_video.py` | `scripts/detect_video.py`: arguments, config defaults vs `--max-frames`/`--all-frames`, summary, JSON contents, overwrite protection, inference failure and Ctrl+C leave no results file; annotated video size, frame count and FPS (source and `--fps`), JSON unchanged by `--output-video`, path conflicts, failures mid-video leave no files, odd sizes rejected; `--tracking` / `--no-tracking` / `--tracker-config`, track IDs in JSON only when tracking, tracker failures leave no files |
 | `test_annotator.py` | Drawing on real pixels: no detections, one and many detections, labels (via a spy on `cv2.putText`), deterministic class colours, clipping at and beyond the frame edges, input frame never modified, invalid input |
 | `test_tracking.py` | `TrackedDetection` validation, ID attachment and config validation (pure Python); the real Ultralytics ByteTrack on hand-made moving boxes: stable IDs, frames without detections, briefly missed objects, IDs reassigned after `track_buffer`, low-score continuation, reset, custom/invalid configs, errors not swallowed; missing `lap`/Ultralytics |
+| `test_export.py` | `export_onnx()` with a fake Ultralytics: exact export arguments (CPU, ONNX), nothing written beside the weights, temp folder removed, missing/invalid source, invalid options and output paths, overwrite protection, a failed export keeps the previous file, export exceptions, missing or empty result, load failure, non-detection model, dependency checks (missing/too old `onnx`/`onnxslim`, no ONNX Runtime, `--no-simplify`, missing PyTorch/Ultralytics), import without optional packages; plus the opt-in real export |
+| `test_onnx_validation.py` | `validate_onnx()`: missing/empty files, missing `onnx`, checker failure and success with a fake `onnx`; real ONNX files built in the test (valid, invalid graph, malformed bytes) when `onnx` is installed; YOLO layout checks (sizes, channels, types, ranks, classes, task, dynamic dimensions); class names parsed safely |
+| `test_export_scripts.py` | `scripts/export_onnx.py` and `scripts/inspect_onnx.py`: `--help` creates no files, invalid arguments, config defaults and overrides, `--no-validate`, error messages and exit codes for every failure, report contents |
 | `test_writer.py` | Mocked `cv2.VideoWriter`: invalid fps/size/codec/path, open failure, wrong frame size, odd sizes, ordering, release and `.partial` cleanup on success and on error, overwrite protection, FPS selection; plus a real write-and-reopen check |
 
 ## Planned coverage
 
-- ONNX model loading and PyTorch/ONNX output comparison
+- ONNX Runtime inference and PyTorch/ONNX output comparison
 - Latency aggregation, percentiles, and FPS calculations
 - Benchmark result serialization
 

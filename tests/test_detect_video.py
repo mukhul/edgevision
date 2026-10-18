@@ -210,7 +210,7 @@ def test_undecodable_video_fails_clearly(fake_yolo, tmp_path: Path, capsys: pyte
     assert "ERROR:" in capsys.readouterr().err
 
 
-# --- annotated output video (Prompt 5) ------------------------------------------------------
+# --- annotated output video ----------------------------------------------------------------
 
 
 def reopen(path: Path) -> tuple[object, int]:
@@ -381,7 +381,7 @@ def test_odd_sized_source_fails_clearly(fake_yolo, tmp_path: Path, capsys: pytes
     assert not out.exists()
 
 
-# --- tracking (Prompt 6) ----------------------------------------------------------------
+# --- tracking --------------------------------------------------------------------------
 
 
 @pytest.fixture

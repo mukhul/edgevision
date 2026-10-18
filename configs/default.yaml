@@ -8,10 +8,10 @@
 # Every section and field is required; use null where a value is "not set".
 # Unknown fields are rejected so that typos are caught early.
 #
-# Currently used: the `model` section supplies defaults for
-# scripts/detect_image.py and scripts/detect_video.py, and the `video` section
-# (input, max_frames) and the `tracking` section for scripts/detect_video.py.
-# The other sections are validated but not yet used (export, output, benchmarking).
+# Currently used: the `model` section supplies defaults for the detection and
+# export scripts; `video` and `tracking` for scripts/detect_video.py; `export`
+# for scripts/export_onnx.py. The other sections are validated but not yet
+# used (output, benchmarking).
 
 model:
   name: yolov8n
@@ -23,9 +23,9 @@ model:
   classes: null                     # null = all classes; or a list of class IDs
 
 export:
-  opset: null                       # to be chosen and documented with the export step
+  opset: null                       # null = Ultralytics picks the best for the installed PyTorch/ONNX (18 with PyTorch 2.14)
   dynamic_shapes: false
-  validate: true                    # compare ONNX outputs against PyTorch
+  validate: true                    # structural ONNX check after export (not a numerical comparison)
 
 video:
   input: data/input/sample.mp4
