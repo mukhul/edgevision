@@ -1,13 +1,17 @@
-"""Run the PyTorch YOLO detector on one image and print what it finds.
+"""Run a YOLO detector on one image and print what it finds.
 
 Run from the repository root:
 
     python scripts/detect_image.py path/to/photo.jpg
     python scripts/detect_image.py path/to/photo.jpg --device cpu --conf 0.4 --json results/photo.json
+    python scripts/detect_image.py path/to/photo.jpg --backend onnx
 
-Defaults for the model, input size, thresholds and class filter come from
-configs/default.yaml; command-line options override them. The first run
-downloads yolov8n.pt to models/ (about 6 MB).
+--backend pytorch (the default) runs the .pt model with Ultralytics;
+--backend onnx runs an exported .onnx model with ONNX Runtime. Defaults for
+the model, input size, thresholds and class filter come from
+configs/default.yaml; command-line options override them. With the PyTorch
+backend, the first run downloads yolov8n.pt to models/ (about 6 MB); ONNX
+models are never downloaded.
 
 Exit status: 0 success, 1 the image/model/inference failed, 2 invalid arguments.
 """
@@ -25,10 +29,12 @@ from edgevision.cli import (
     add_detector_arguments,
     describe_settings,
     detection_settings,
+    detector_details,
     model_name,
 )
 from edgevision.config import ConfigError, load_config
-from edgevision.models import Detection, DetectionSettings, DetectorError, PytorchYoloDetector
+from edgevision.models import Detection, DetectionSettings, DetectorError, create_detector
+from edgevision.models.factory import check_model_matches_backend
 from edgevision.optional import MissingDependencyError, import_optional
 
 EXAMPLES = """\
@@ -36,6 +42,7 @@ examples:
   python scripts/detect_image.py data/input/photo.jpg
   python scripts/detect_image.py data/input/photo.jpg --device cpu --conf 0.4
   python scripts/detect_image.py data/input/photo.jpg --json results/photo_detections.json
+  python scripts/detect_image.py data/input/photo.jpg --backend onnx --device cpu
 """
 
 
@@ -49,7 +56,7 @@ class ImageError(Exception):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python scripts/detect_image.py",
-        description="Detect objects in one image with the PyTorch YOLO backend.",
+        description="Detect objects in one image with a YOLO model on PyTorch or ONNX Runtime.",
         epilog=EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -86,10 +93,11 @@ def format_summary(
     device: str,
     settings: DetectionSettings,
     detections: list[Detection],
+    runtime: str = "PyTorch via Ultralytics",
 ) -> str:
     lines = [
         f"Image        {image_path} ({image_size[0]} x {image_size[1]} px)",
-        f"Model        {model} (PyTorch via Ultralytics, device: {device})",
+        f"Model        {model} ({runtime}, device: {device})",
         f"Settings     {describe_settings(settings)}",
         f"Detections   {len(detections)}",
     ]
@@ -111,14 +119,18 @@ def results_document(
     device: str,
     settings: DetectionSettings,
     detections: list[Detection],
+    backend: str = "pytorch",
+    details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """The JSON document. ``details`` adds backend-specific facts (ONNX: execution providers)."""
     return {
         "edgevision_version": edgevision.__version__,
-        "backend": "pytorch",
+        "backend": backend,
         "image": image_path.as_posix(),
         "image_size": {"width": image_size[0], "height": image_size[1]},
         "model": model,
         "device": device,
+        **(details or {}),
         "settings": settings.to_dict(),
         "bbox_format": "xyxy, original image pixels",
         "detections": [d.to_dict() for d in detections],
@@ -139,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))  # exits with status 2
     model = model_name(args, model_config)
+    try:
+        check_model_matches_backend(args.backend, model)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.json is not None and args.json.exists() and not args.overwrite:
         print(f"ERROR: {args.json} already exists; pass --overwrite to replace it.", file=sys.stderr)
@@ -146,20 +162,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         image = read_image(args.image)
-        if not Path(model).exists():
+        if args.backend == "pytorch" and not Path(model).exists():
             print(f"Note: {model} not found locally; Ultralytics will try to download it.", file=sys.stderr)
-        with PytorchYoloDetector(model, device=args.device, settings=settings) as detector:
-            device = detector.device
+        with create_detector(args.backend, model, device=args.device, settings=settings) as detector:
+            device, runtime, details = detector.device, detector.description, detector_details(detector)
             detections = detector.detect(image, frame_index=0)
     except (ImageError, MissingDependencyError, DetectorError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     image_size = (image.shape[1], image.shape[0])
-    print(format_summary(args.image, image_size, model, device, settings, detections))
+    print(format_summary(args.image, image_size, model, device, settings, detections, runtime))
 
     if args.json is not None:
-        document = results_document(args.image, image_size, model, device, settings, detections)
+        document = results_document(
+            args.image, image_size, model, device, settings, detections, args.backend, details
+        )
         try:
             args.json.parent.mkdir(parents=True, exist_ok=True)
             args.json.write_text(json.dumps(document, indent=2), encoding="utf-8")

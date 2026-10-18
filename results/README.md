@@ -41,6 +41,9 @@ This example is a two-frame run (`--max-frames 2`); the values illustrate the fo
 | Field | Notes |
 |-------|-------|
 | `video` | Metadata *reported* by the file; any value may be `null` if unknown |
+| `detector.backend` | `pytorch` or `onnx` (`--backend`) |
+| `detector.device` | `cpu` or `cuda:0`: where inference actually ran |
+| `detector.execution_providers` | **ONNX backend only:** the ONNX Runtime execution providers the session actually used, in priority order, e.g. `["CPUExecutionProvider"]`. Absent for PyTorch, whose files are unchanged |
 | `detector.settings` | Exactly the settings used, so the run can be repeated |
 | `bbox_format` | `xyxy_pixels`: `[x1, y1, x2, y2]`, top-left and bottom-right corners in pixels of the original frame |
 | `frames` | One entry per processed frame, in order, with zero-based `frame_index`; frames without detections have an empty list |

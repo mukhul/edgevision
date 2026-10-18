@@ -14,6 +14,7 @@ from pathlib import Path
 
 from edgevision.config import DEFAULT_CONFIG_PATH, ModelConfig
 from edgevision.models.base import DetectionSettings
+from edgevision.models.factory import BACKENDS, DEFAULT_BACKEND
 
 
 def fraction(text: str) -> float:
@@ -50,11 +51,20 @@ def positive_float(text: str) -> float:
 
 
 def add_detector_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add --model, --device, --conf, --iou, --imgsz and --config."""
-    parser.add_argument("--model", help="model name or .pt path (default: model.weights from the config)")
+    """Add --backend, --model, --device, --conf, --iou, --imgsz and --config."""
+    parser.add_argument(
+        "--backend", choices=list(BACKENDS), default=DEFAULT_BACKEND,
+        help="inference backend: pytorch (Ultralytics) or onnx (ONNX Runtime with an exported model) "
+        f"(default: {DEFAULT_BACKEND})",
+    )
+    parser.add_argument(
+        "--model",
+        help="model file for the chosen backend (default: model.weights from the config for pytorch, "
+        "model.onnx_path for onnx)",
+    )
     parser.add_argument(
         "--device", choices=["auto", "cpu", "cuda"], default="auto",
-        help="compute device (default: auto = CUDA if PyTorch can use it, else CPU)",
+        help="compute device (default: auto = CUDA if the backend can use it, else CPU)",
     )
     parser.add_argument("--conf", type=fraction, help="confidence threshold 0-1 (default: from config)")
     parser.add_argument("--iou", type=fraction, help="NMS IoU threshold 0-1 (default: from config)")
@@ -78,7 +88,22 @@ def detection_settings(args: argparse.Namespace, model_config: ModelConfig) -> D
 
 
 def model_name(args: argparse.Namespace, model_config: ModelConfig) -> str:
-    return args.model or model_config.weights.as_posix()
+    """The model to load: --model, else the config's path for the selected backend."""
+    if args.model:
+        return args.model
+    if getattr(args, "backend", DEFAULT_BACKEND) == "onnx":
+        return model_config.onnx_path.as_posix()
+    return model_config.weights.as_posix()
+
+
+def detector_details(detector: object) -> dict[str, object]:
+    """Extra, backend-specific facts to record in JSON results (empty for PyTorch).
+
+    For ONNX Runtime, this is the list of execution providers the session
+    actually uses, so a result file always shows whether a GPU was involved.
+    """
+    providers = getattr(detector, "providers", None)
+    return {} if providers is None else {"execution_providers": list(providers)}
 
 
 def describe_settings(settings: DetectionSettings) -> str:

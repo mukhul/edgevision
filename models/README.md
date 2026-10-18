@@ -7,7 +7,7 @@ Locally downloaded weights and exported models. **Model files are not committed*
 | File | How it is obtained |
 |------|--------------------|
 | `yolov8n.pt` | Pretrained Ultralytics YOLOv8n weights (~6 MB, 80 COCO classes). Downloaded by Ultralytics the first time a detector loads `models/yolov8n.pt`, for example by running `python scripts/detect_image.py <image>`. Nothing is downloaded at install time or by the tests. |
-| `yolov8n.onnx` | Generated from `yolov8n.pt` by `python scripts/export_onnx.py` (needs the `detector` and `export` extras). About 12.3 MiB. |
+| `yolov8n.onnx` | Generated from `yolov8n.pt` by `python scripts/export_onnx.py` (needs the `detector`, `export` and `onnxruntime` extras). About 12.3 MiB. |
 
 To use other weights, pass `--model path/to/weights.pt` to `detect_image.py`, or change `model.weights` in the config. They must be an Ultralytics **detection** model; segmentation, pose or classification models are rejected.
 
@@ -22,7 +22,7 @@ To use other weights, pass `--model path/to/weights.pt` to `detect_image.py`, or
 
 Ultralytics also stores metadata in the file (task, input size, class names, version), which `python scripts/inspect_onnx.py models/yolov8n.onnx` displays.
 
-The file is only checked **structurally** (official ONNX checker, input/output layout). Numerical comparison with PyTorch, and the tolerances it will use, will be documented here when that step exists. The input description above is what Ultralytics' YOLO models expect; it has not yet been verified with ONNX Runtime in this project.
+`export_onnx.py` checks the file **structurally** (official ONNX checker, input/output layout). Run it with `--backend onnx` in `detect_image.py` / `detect_video.py` (needs the `onnxruntime` extra). On Linux (CPU), EdgeVision's ONNX backend gave the same detections as Ultralytics running this file, and as the PyTorch model given the same square input, on three test images. A systematic comparison with agreed tolerances is not done yet; see the main README for why default PyTorch and ONNX results differ slightly.
 
 ## License note
 

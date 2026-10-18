@@ -16,7 +16,7 @@
 model:
   name: yolov8n
   weights: models/yolov8n.pt        # downloaded locally; not committed
-  onnx_path: models/yolov8n.onnx    # produced by the export step; not committed
+  onnx_path: models/yolov8n.onnx    # written by export_onnx.py, read by --backend onnx; not committed
   input_size: 640                   # square model input, pixels
   conf_threshold: 0.25
   iou_threshold: 0.7                # NMS IoU threshold

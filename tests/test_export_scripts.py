@@ -93,7 +93,8 @@ def test_defaults_come_from_the_config(export_script, capsys: pytest.CaptureFixt
     assert kwargs == {"input_size": 640, "opset": None, "simplify": True, "dynamic": False, "overwrite": False}
     assert export_script.calls["validate"] == [Path("models/yolov8n.onnx")]
     out = capsys.readouterr().out
-    assert "Exported: models/yolov8n.onnx (12.3 MiB, 12,851,106 bytes)" in out
+    # The path is printed in the platform's own style (models\yolov8n.onnx on Windows).
+    assert f"Exported: {Path('models/yolov8n.onnx')} (12.3 MiB, 12,851,106 bytes)" in out
     assert "ONNX checker passed" in out and "does not prove" in out
 
 

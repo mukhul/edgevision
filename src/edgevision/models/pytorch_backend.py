@@ -101,6 +101,7 @@ class PytorchYoloDetector:
     """
 
     backend_name = "pytorch"
+    description = "PyTorch via Ultralytics"  # short runtime description, for summaries
 
     def __init__(
         self,

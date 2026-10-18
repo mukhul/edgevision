@@ -115,7 +115,8 @@ def check_export_dependencies(simplify: bool) -> None:
     if simplify and not any(_installed_version(d) for d in ONNXRUNTIME_DISTRIBUTIONS):
         raise MissingDependencyError(
             "An ONNX Runtime package is required to simplify the exported model but none is installed. "
-            f"{hint} (or export with simplify=False / --no-simplify)"
+            f"Install one with: {install_hint('onnxruntime')} (CPU) or {install_hint('onnxruntime-gpu')} "
+            "(NVIDIA GPU; install only one of the two), or export with simplify=False / --no-simplify"
         )
 
 

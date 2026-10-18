@@ -6,9 +6,9 @@ Command-line entry points. Run them from the repository root after installing th
 
 | Script | Purpose |
 |--------|---------|
-| `detect_image.py` | Run the PyTorch YOLO detector on one image; print detections (class, confidence, `xyxy` box in pixels) and optionally save them as JSON. Defaults come from `configs/default.yaml`. Needs the `vision` and `detector` extras; the first run downloads `yolov8n.pt` to `models/`. |
-| `detect_video.py` | Run the PyTorch YOLO detector on every frame of a video via `edgevision.pipeline`; print a processing summary (frames processed, frames with/without detections, totals per class; no timing) optionally stream per-frame detections to JSON (schema in `results/README.md`), optionally write an annotated `.mp4` (`--output-video`, with `--fps` to override the frame rate), and optionally track objects across frames with ByteTrack (`--tracking`, `--tracker-config`; needs the `tracking` extra), adding track IDs to the video labels and JSON. Video path, frame limit, model and thresholds default to the config. Needs the `vision` and `detector` extras. |
-| `export_onnx.py` | Export a local YOLO `.pt` model to ONNX on the CPU (`--model`, `--output`, `--imgsz`, `--opset`, `--dynamic`, `--no-simplify`, `--overwrite`; defaults from the config), then validate the file structurally (`--no-validate` to skip). Never downloads weights and never replaces an existing file without `--overwrite`. Needs the `detector` and `export` extras. |
+| `detect_image.py` | Run a YOLO detector on one image, with PyTorch (`--backend pytorch`, the default) or ONNX Runtime (`--backend onnx`, an exported `.onnx` file, default `model.onnx_path`); print detections (class, confidence, `xyxy` box in pixels) and optionally save them as JSON. Defaults come from `configs/default.yaml`. Needs the `vision` extra plus `detector` (PyTorch) or `onnxruntime` (ONNX); with PyTorch, the first run downloads `yolov8n.pt` to `models/`. ONNX models are never downloaded. |
+| `detect_video.py` | Run a YOLO detector (`--backend pytorch` or `onnx`, as above) on every frame of a video via `edgevision.pipeline`; print a processing summary (frames processed, frames with/without detections, totals per class; no timing) optionally stream per-frame detections to JSON (schema in `results/README.md`), optionally write an annotated `.mp4` (`--output-video`, with `--fps` to override the frame rate), and optionally track objects across frames with ByteTrack (`--tracking`, `--tracker-config`; needs the `tracking` extra), adding track IDs to the video labels and JSON. Video path, frame limit, model and thresholds default to the config. Needs the `vision` extra plus `detector` or `onnxruntime`. |
+| `export_onnx.py` | Export a local YOLO `.pt` model to ONNX on the CPU (`--model`, `--output`, `--imgsz`, `--opset`, `--dynamic`, `--no-simplify`, `--overwrite`; defaults from the config), then validate the file structurally (`--no-validate` to skip). Never downloads weights and never replaces an existing file without `--overwrite`. Needs the `detector`, `export` and `onnxruntime` extras (`onnxruntime` is not needed with `--no-simplify`). |
 | `inspect_onnx.py` | Validate an existing `.onnx` file with the official ONNX checker and report its opset, inputs, outputs and metadata; `--imgsz N` also checks the input size. Structural only: it does not compare results with PyTorch. Needs the `export` extra (only `onnx` is used). |
 | `inspect_video.py` | Report a video's metadata (resolution, FPS, reported frame count, codec), how many frames can actually be decoded, and whether reading stopped at the end of the video or at `--max-frames`. Needs the `vision` extra. |
 
@@ -20,6 +20,8 @@ python scripts/detect_video.py data/input/sample.mp4 --max-frames 100 --json res
 python scripts/detect_video.py data/input/sample.mp4 --all-frames --device cpu
 python scripts/detect_video.py data/input/sample.mp4 --output-video results/sample_annotated.mp4
 python scripts/detect_video.py data/input/sample.mp4 --tracking --output-video results/sample_tracked.mp4 --json results/sample_tracks.json
+python scripts/detect_image.py path/to/photo.jpg --backend onnx --device cpu
+python scripts/detect_video.py data/input/sample.mp4 --backend onnx --json results/sample_onnx.json
 python scripts/inspect_video.py data/input/sample.mp4
 python scripts/inspect_video.py data/input/sample.mp4 --max-frames 100
 python scripts/inspect_video.py --help
@@ -36,7 +38,6 @@ Exit status for the other three: `0` success, `1` the input cannot be read or pr
 
 | Script | Purpose |
 |--------|---------|
-| `run_video.py` | Process a video with a chosen backend (PyTorch or ONNX Runtime) with optional tracking and annotated output (builds on `detect_video.py`) |
 | `benchmark.py` | Run repeatable latency/throughput benchmarks across backends |
 | `evaluate.py` | Evaluate detection quality against ground-truth annotations |
 | `plot_results.py` | Generate plots from saved benchmark results |

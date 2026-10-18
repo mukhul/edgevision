@@ -238,7 +238,8 @@ def test_missing_export_dependencies(
     fake.versions = versions
     with pytest.raises(MissingDependencyError, match=message) as info:
         export_onnx(weights, tmp_path / "out.onnx", simplify=simplify)
-    assert 'pip install -e ".[export]"' in str(info.value)
+    expected_extra = ".[onnxruntime]" if "ONNX Runtime" in message else ".[export]"
+    assert f'pip install -e "{expected_extra}"' in str(info.value)
     assert fake.loaded == []  # Ultralytics never got the chance to auto-install anything
 
 

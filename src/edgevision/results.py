@@ -15,7 +15,7 @@ File layout (schema ``edgevision.video_detections``, version 1)::
       "edgevision_version": "...",
       "created_utc": "2026-10-17T11:00:00Z",
       "video": {"path", "width", "height", "fps", "frame_count_reported", "fourcc"},
-      "detector": {"backend", "model", "device", "settings": {...}},
+      "detector": {"backend", "model", "device", ["execution_providers"], "settings": {...}},
       "bbox_format": "xyxy_pixels",
       "frames": [
         {"frame_index": 0, "detections": [
@@ -69,11 +69,14 @@ def video_header(
     device: str,
     settings: dict[str, Any],
     tracker: dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The descriptive part of a results file, written before the frames.
 
-    ``tracker`` (name and settings) is added only when tracking was used, so
-    detection-only files keep exactly their original layout.
+    ``tracker`` (name and settings) is added only when tracking was used, and
+    ``details`` (backend-specific facts such as ONNX Runtime's
+    ``execution_providers``) only when given, so PyTorch detection-only files
+    keep exactly their original layout.
     """
     header = {
         "edgevision_version": edgevision.__version__,
@@ -86,7 +89,7 @@ def video_header(
             "frame_count_reported": metadata.frame_count,
             "fourcc": metadata.fourcc,
         },
-        "detector": {"backend": backend, "model": model, "device": device, "settings": settings},
+        "detector": {"backend": backend, "model": model, "device": device, **(details or {}), "settings": settings},
         "bbox_format": BBOX_FORMAT,
     }
     if tracker is not None:

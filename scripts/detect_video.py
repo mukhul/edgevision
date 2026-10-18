@@ -1,4 +1,4 @@
-"""Run the PyTorch YOLO detector on every frame of a video, summarise the results,
+"""Run a YOLO detector on every frame of a video, summarise the results,
 and optionally save per-frame JSON and/or an annotated copy of the video.
 
 Run from the repository root:
@@ -7,8 +7,11 @@ Run from the repository root:
     python scripts/detect_video.py data/input/sample.mp4 --max-frames 100 --json results/sample_detections.json
     python scripts/detect_video.py data/input/sample.mp4 --output-video results/sample_annotated.mp4
     python scripts/detect_video.py data/input/sample.mp4 --tracking --output-video results/sample_tracked.mp4
+    python scripts/detect_video.py data/input/sample.mp4 --backend onnx --device cpu
 
-The video path, frame limit, model, input size, thresholds and class filter
+--backend pytorch (the default) runs the .pt model with Ultralytics;
+--backend onnx runs an exported .onnx model with ONNX Runtime. Everything
+after detection (tracking, annotation, JSON, video output) is shared. The video path, frame limit, model, input size, thresholds and class filter
 default to configs/default.yaml; command-line options override them. This is
 a processing summary, not a benchmark: no speed is measured or reported.
 
@@ -27,12 +30,14 @@ from edgevision.cli import (
     add_detector_arguments,
     describe_settings,
     detection_settings,
+    detector_details,
     model_name,
     positive_float,
     positive_int,
 )
 from edgevision.config import ConfigError, load_config
-from edgevision.models import DetectorError, PytorchYoloDetector
+from edgevision.models import DetectorError, create_detector
+from edgevision.models.factory import check_model_matches_backend
 from edgevision.optional import MissingDependencyError
 from edgevision.pipeline import PipelineError, PipelineSummary, VideoDetectionPipeline
 from edgevision.results import VideoDetectionsWriter, video_header
@@ -56,13 +61,14 @@ examples:
   python scripts/detect_video.py data/input/sample.mp4 --all-frames --json results/sample_detections.json
   python scripts/detect_video.py data/input/sample.mp4 --output-video results/sample_annotated.mp4
   python scripts/detect_video.py data/input/sample.mp4 --tracking --json results/sample_tracks.json
+  python scripts/detect_video.py data/input/sample.mp4 --backend onnx --json results/sample_onnx.json
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python scripts/detect_video.py",
-        description="Detect objects in every frame of a video with the PyTorch YOLO backend.",
+        description="Detect objects in every frame of a video with a YOLO model on PyTorch or ONNX Runtime.",
         epilog=EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -110,7 +116,9 @@ def same_file(a: Path, b: Path) -> bool:
     return a.resolve() == b.resolve()
 
 
-def format_summary(summary: PipelineSummary, model: str, device: str, settings_text: str) -> str:
+def format_summary(
+    summary: PipelineSummary, model: str, device: str, settings_text: str, runtime: str = "PyTorch via Ultralytics"
+) -> str:
     m = summary.metadata
     size = "unknown size" if m.width is None or m.height is None else f"{m.width} x {m.height} px"
     fps = "unknown" if m.fps is None else f"{m.fps:.3f}"
@@ -127,7 +135,7 @@ def format_summary(summary: PipelineSummary, model: str, device: str, settings_t
         "Processing summary (not a benchmark: no timing is measured)",
         f"  Video                      {summary.video_path}",
         f"                             {size}, FPS {fps} (reported), {reported} frames (reported)",
-        f"  Model                      {model} (PyTorch via Ultralytics, device: {device})",
+        f"  Model                      {model} ({runtime}, device: {device})",
         f"  Settings                   {settings_text}",
         f"  Frame limit                {summary.max_frames if summary.max_frames is not None else 'none'}",
         f"  Frames processed           {summary.frames_processed}",
@@ -159,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))  # exits with status 2
     model = model_name(args, config.model)
+    try:
+        check_model_matches_backend(args.backend, model)
+    except ValueError as exc:
+        parser.error(str(exc))
     video = args.video if args.video is not None else config.video.input
     if args.all_frames:
         max_frames = None
@@ -189,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {output} already exists; pass --overwrite to replace it.", file=sys.stderr)
             return 1
 
-    if not Path(model).exists():
+    if args.backend == "pytorch" and not Path(model).exists():
         print(f"Note: {model} not found locally; Ultralytics will try to download it.", file=sys.stderr)
     tracker = None
     if tracking:
@@ -206,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         # finished), then the input video, then the detector.
         with ExitStack() as stack:
             detector = stack.enter_context(
-                PytorchYoloDetector(model, device=args.device, settings=settings)
+                create_detector(args.backend, model, device=args.device, settings=settings)
             )
             pipeline = stack.enter_context(
                 VideoDetectionPipeline(video, detector, max_frames=max_frames, tracker=tracker)
@@ -219,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
                     model=model,
                     device=detector.device,
                     settings=settings.to_dict(),
+                    details=detector_details(detector),
                     tracker=None if tracker is None else {
                         "name": tracker.name, "config": tracker.config_source, "settings": tracker.settings,
                     },
@@ -257,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
                 video_writer.finish()
             if json_writer is not None:
                 json_writer.finish(summary.to_dict())
-            device = detector.device
+            device, runtime = detector.device, detector.description
     except KeyboardInterrupt:
         print("\nInterrupted: no output files were written.", file=sys.stderr)
         return 130
@@ -267,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             print("No output files were written.", file=sys.stderr)
         return 1
 
-    print(format_summary(summary, model, device, describe_settings(settings)))
+    print(format_summary(summary, model, device, describe_settings(settings), runtime))
     if tracker is not None:
         print(
             f"  Tracking                   {tracker.name} ({tracker.config_source})\n"

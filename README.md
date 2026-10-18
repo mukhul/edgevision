@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, optional multi-object tracking with ByteTrack (track IDs in the video and JSON), and export of the model to ONNX with structural validation of the exported file. ONNX Runtime inference, PyTorch-vs-ONNX numerical comparison, GPU execution, and benchmarking are not implemented. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
+> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, optional multi-object tracking with ByteTrack (track IDs in the video and JSON), export of the model to ONNX with structural validation, and an ONNX Runtime backend (`--backend onnx`) that runs the exported model on the CPU through the same pipeline. GPU execution has not been tested, and there is no systematic PyTorch-vs-ONNX accuracy comparison or benchmarking yet. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -28,8 +28,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Detection on video frames (pipeline, summary, JSON export) | ✅ | ✅ ² | — |
 | ONNX export and structural validation | ✅ | ✅ ⁵ | n/a |
 | ONNX numerical validation (PyTorch vs ONNX outputs) | ✅ | — | — |
-| Object detection — ONNX Runtime CPU | ✅ | — | — |
-| Object detection — ONNX Runtime CUDA (when available) | ✅ | — | — |
+| Object detection — ONNX Runtime CPU | ✅ | ✅ ⁶ | — |
+| Object detection — ONNX Runtime CUDA (when available) | ✅ | code path only, untested ⁶ | — |
 | Multi-object tracking (ByteTrack, optional) | ✅ | ✅ ⁴ | n/a |
 | Annotated output video (boxes, class names, confidences) | ✅ | ✅ ³ | n/a |
 | Latency / throughput benchmark runner | ✅ | — | — |
@@ -50,6 +50,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 
 ⁵ Covered by mocked unit tests (Ultralytics and `onnx` replaced by fakes), tests on small real ONNX files built with the `onnx` package, and an opt-in real-model test that exports `yolov8n.pt` at 320×320 and validates it. The command was also run for real on Linux (CPU; PyTorch 2.14.1, Ultralytics 8.4.178, onnx 1.23.2): `models/yolov8n.onnx` (12,851,106 bytes, opset 18) passed the official ONNX checker with input `images` FLOAT `[1, 3, 640, 640]` and output `output0` FLOAT `[1, 84, 8400]`. This shows the file is well-formed, **not** that it gives the same detections as PyTorch; that comparison is a later step.
 
+⁶ Covered by unit tests with a fake ONNX Runtime session and synthetic model outputs, by tests that compare EdgeVision's letterbox and NMS code with Ultralytics' own implementations on random inputs, by command tests, and by an opt-in real CPU test. Run for real on Linux (CPU, ONNX Runtime 1.31.0): on three test images EdgeVision's ONNX backend gave the same detections as Ultralytics running the same `.onnx` file (largest box difference below 0.0001 px). It also gave the same detections as the PyTorch model **when both used the same square 640×640 input** (largest box difference 0.0001 px, score difference below 10⁻⁶). With default settings the two backends do differ, because the PyTorch backend pads frames to a smaller rectangle; see [Why PyTorch and ONNX results differ slightly](#why-pytorch-and-onnx-results-differ-slightly). The CUDA provider path is implemented and unit-tested with fakes, but no NVIDIA GPU was available to run it.
+
 **What exists today:**
 
 - An installable `edgevision` package (src layout) whose only required dependency is PyYAML.
@@ -67,6 +69,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - `edgevision.models.export`: `export_onnx()` exports a YOLO `.pt` model to ONNX on the CPU through Ultralytics' export API, without downloading anything, writing next to the weights, or replacing an existing file unless asked.
 - `edgevision.models.onnx_validation`: `validate_onnx()` runs the official ONNX checker and describes the model's inputs, outputs, opset and metadata; `yolo_layout_problems()` checks that they look like a YOLO detection model.
 - `scripts/export_onnx.py` (export, then validate) and `scripts/inspect_onnx.py` (validate and describe an existing `.onnx` file).
+- `edgevision.models.onnx_backend`: `OnnxYoloDetector` runs an exported `.onnx` model with ONNX Runtime behind the same `Detector` interface, with explicit execution-provider selection and its own preprocessing, decoding and NMS. It does not need PyTorch or Ultralytics.
+- `--backend pytorch|onnx` in `detect_image.py` and `detect_video.py` (PyTorch stays the default). Tracking, annotated video and JSON output work with either backend.
 - pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes in unit tests. A few integration tests use real OpenCV or ONNX when installed, and opt-in tests run the real YOLOv8n model.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
@@ -152,6 +156,8 @@ edgevision/
 │       │   ├── __init__.py
 │       │   ├── base.py      # Detection, DetectionSettings, Detector protocol
 │       │   ├── export.py    # export_onnx(): .pt -> .onnx via Ultralytics, CPU
+│       │   ├── factory.py   # create_detector(backend, ...), --backend checks
+│       │   ├── onnx_backend.py  # OnnxYoloDetector (ONNX Runtime) + pre/postprocessing
 │       │   ├── onnx_validation.py  # validate_onnx(): ONNX checker + input/output report
 │       │   └── pytorch_backend.py  # PytorchYoloDetector (Ultralytics YOLO)
 │       └── video/
@@ -173,11 +179,13 @@ edgevision/
 │   ├── conftest.py          # fake PyTorch/Ultralytics used by detector tests
 │   ├── test_detect_image.py
 │   ├── test_annotator.py
+│   ├── test_backend_selection.py
 │   ├── test_detect_video.py
 │   ├── test_detection.py
 │   ├── test_export.py
 │   ├── test_export_scripts.py
 │   ├── test_inspect_video.py
+│   ├── test_onnx_backend.py
 │   ├── test_onnx_validation.py
 │   ├── test_package.py
 │   ├── test_pipeline.py
@@ -199,7 +207,7 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `models/` (ONNX Runtime backend), `benchmarks/` (timing, runner, metrics, report), and `evaluation/`.
+Planned modules under `src/edgevision/` (added only as they are implemented): `benchmarks/` (timing, runner, metrics, report), and `evaluation/`.
 
 ## Planned benchmark methodology
 
@@ -228,7 +236,9 @@ Optional extras keep the base install light. Install only what you need:
 | `vision` | `opencv-python` | reading video and images |
 | `detector` | Ultralytics, PyTorch (and torchvision via Ultralytics) | YOLO object detection |
 | `tracking` | Ultralytics, `lap` | ByteTrack tracking (`--tracking`) |
-| `export` | `onnx`, `onnxslim`, `onnxruntime` (CPU) | ONNX export and validation (together with `detector`) |
+| `export` | `onnx`, `onnxslim` | ONNX export and validation (together with `detector` and one runtime extra) |
+| `onnxruntime` | `onnxruntime` (CPU build) | ONNX Runtime inference (`--backend onnx`) on the CPU, and export simplification |
+| `onnxruntime-gpu` | `onnxruntime-gpu` | The same on NVIDIA GPUs (CUDA); **instead of** `onnxruntime`, never together |
 
 Windows (PowerShell):
 
@@ -238,7 +248,7 @@ cd edgevision
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,vision,detector,tracking,export]"
+python -m pip install -e ".[dev,vision,detector,tracking,export,onnxruntime]"
 ```
 
 If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use Command Prompt with `.venv\Scripts\activate.bat`. On Windows the default PyPI `torch` wheel is the CPU-only build, which is what a laptop without an NVIDIA GPU needs.
@@ -253,7 +263,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 # Linux without an NVIDIA GPU: install the much smaller CPU-only PyTorch build first
 python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e ".[dev,vision,detector,tracking,export]"
+python -m pip install -e ".[dev,vision,detector,tracking,export,onnxruntime]"
 ```
 
 On Linux the default PyPI `torch` wheel is a large CUDA build; the extra line above avoids it. macOS wheels from PyPI are CPU/MPS builds. No CUDA-specific PyTorch build is pinned by this project.
@@ -263,7 +273,7 @@ On Linux the default PyPI `torch` wheel is a large CUDA build; the extra line ab
 >
 > ```bash
 > python -m pip uninstall -y opencv-python-headless opencv-python
-> python -m pip install -e ".[dev,vision,detector,tracking,export]"
+> python -m pip install -e ".[dev,vision,detector,tracking,export,onnxruntime]"
 > ```
 >
 > `python -m edgevision.device` warns if more than one OpenCV package is installed.
@@ -394,7 +404,7 @@ flowchart LR
 
 #### ONNX export and validation
 
-**What ONNX is.** A trained PyTorch model is Python code plus weights, so it needs PyTorch to run. [ONNX](https://onnx.ai/) (Open Neural Network Exchange) is a file format that stores the model as a graph of standard operations (convolution, addition, sigmoid, …) together with its weights. Other runtimes, such as ONNX Runtime, TensorRT or OpenVINO, can load that file without PyTorch. Exporting to ONNX is the first step towards comparing PyTorch with ONNX Runtime. This project currently **exports and checks the file only**; it does not run inference with it yet.
+**What ONNX is.** A trained PyTorch model is Python code plus weights, so it needs PyTorch to run. [ONNX](https://onnx.ai/) (Open Neural Network Exchange) is a file format that stores the model as a graph of standard operations (convolution, addition, sigmoid, …) together with its weights. Other runtimes, such as ONNX Runtime, TensorRT or OpenVINO, can load that file without PyTorch. Exporting to ONNX is the first step towards comparing PyTorch with ONNX Runtime. Export and structural checks are described here; running the file is covered in [ONNX Runtime inference](#onnx-runtime-inference).
 
 ```mermaid
 flowchart LR
@@ -403,10 +413,10 @@ flowchart LR
     ON --> CK[ONNX checker<br/>+ input/output report]
 ```
 
-Install the `export` extra **together with** `detector` (export needs PyTorch and Ultralytics):
+Install the `export` extra **together with** `detector` (export needs PyTorch and Ultralytics) and `onnxruntime` (used to simplify the graph):
 
 ```bat
-python -m pip install -e ".[dev,vision,detector,tracking,export]"
+python -m pip install -e ".[dev,vision,detector,tracking,export,onnxruntime]"
 ```
 
 Then, on Windows (Command Prompt or PowerShell, venv activated, from the repository root):
@@ -442,12 +452,12 @@ What happens during export:
 - **CPU only, nothing downloaded.** The source must be a local `.pt` file; a missing file is an error, not a download. Export runs with `device="cpu"`.
 - **No surprise installs.** Ultralytics pip-installs missing export packages at export time. EdgeVision checks for `onnx`, `onnxslim` and an ONNX Runtime package first and stops with an install hint instead.
 - **No files next to your weights.** Ultralytics always writes `<weights>.onnx` beside the `.pt` file. EdgeVision gives it a copy of the weights in a temporary folder, so its log mentions a temporary path; the result is then copied to `PATH.partial.onnx` and renamed to the requested path. A failed export leaves no output and keeps any previous file.
-- **Graph contents.** The model is exported as Ultralytics exports it by default: FP32, batch 1, and **without non-maximum suppression** inside the graph. The single output `output0` has shape `[1, 84, 8400]`: for each of 8,400 candidate boxes (from the 80×80, 40×40 and 20×20 grids at 640×640), 4 box values (centre x, centre y, width, height, in input pixels) followed by 80 class scores. Decoding and NMS will be part of the ONNX Runtime backend. At 320×320 there are 2,100 candidates.
+- **Graph contents.** The model is exported as Ultralytics exports it by default: FP32, batch 1, and **without non-maximum suppression** inside the graph. The single output `output0` has shape `[1, 84, 8400]`: for each of 8,400 candidate boxes (from the 80×80, 40×40 and 20×20 grids at 640×640), 4 box values (centre x, centre y, width, height, in input pixels) followed by 80 class scores. The ONNX Runtime backend does the decoding and NMS. At 320×320 there are 2,100 candidates.
 - **Output.** `Exported: models/yolov8n.onnx (12.3 MiB, 12,851,106 bytes)`, then the validation result.
 
 **Structural validation vs numerical parity.** These are two different questions:
 
-| | Structural validation (implemented) | Numerical parity (not yet implemented) |
+| | Structural validation (implemented) | Numerical parity (no systematic check yet) |
 |---|---|---|
 | Question | Is this a well-formed ONNX model with the expected inputs and outputs? | Does it produce the same numbers as the PyTorch model? |
 | How | `onnx.checker.check_model(full_check=True)`, then read input/output names, types and shapes, and check the YOLO layout | Run both models on the same images and compare outputs within a tolerance |
@@ -477,20 +487,114 @@ Common errors:
 |---------|---------------|
 | `Model file not found: models/yolov8n.pt` | Export never downloads. Run `python scripts\detect_image.py <any image>` once, or pass `--model`. |
 | `models\yolov8n.onnx already exists; use overwrite=True (--overwrite) to replace it` | Protection against silently replacing a file. Add `--overwrite` or choose another `--output`. |
-| `onnx is required to export ONNX models but is not installed` (or `onnxslim`, or `An ONNX Runtime package is required ...`) | Install the extra: `python -m pip install -e ".[export]"`. Without simplification only `onnx` is needed: `--no-simplify`. |
+| `onnx is required to export ONNX models but is not installed` (or `onnxslim`) | Install the extra: `python -m pip install -e ".[export]"`. |
+| `An ONNX Runtime package is required to simplify the exported model ...` | `python -m pip install -e ".[onnxruntime]"`, or export without simplification: `--no-simplify`. |
 | `onnx 1.11.0 is installed, but Ultralytics' exporter needs onnx>=1.12.0,<2.0.0` | Upgrade by reinstalling the extra. |
 | `PyTorch is required to export models ...` / `Ultralytics is required ...` | Install the `detector` extra too. |
 | `input_size must be ... a multiple of 32` (exit 2) | YOLO's grids need sizes such as 320, 480, 640. |
 | `... is not a valid ONNX model: ...` | The file is truncated, corrupt, or not ONNX. Export it again with `--overwrite`. |
 | `YOLO layout NOT as expected` | The file is valid ONNX but not the expected detection model, e.g. exported at another size (`--imgsz`) or a segmentation model. |
 
-**GPU note.** The `export` extra installs the CPU `onnxruntime` package, which is all export needs. Do not also install `onnxruntime-gpu` in the same environment: the two packages contain the same module and overwrite each other. GPU execution will be handled when the ONNX Runtime backend is added.
+**ONNX Runtime and export.** Graph simplification (the default) needs an ONNX Runtime package, so install `export` together with `onnxruntime` (or `onnxruntime-gpu`, never both). `export` does not include it, so that GPU users are not forced to install the conflicting CPU package.
 
 **Git.** `.onnx` files are ignored by `.gitignore` (`*.onnx`, which also covers `*.partial.onnx`), like the `.pt` weights. Do not commit them: they are 12 MB build outputs that anyone can regenerate with `export_onnx.py`. Check with `git status` that `models/yolov8n.onnx` does not appear.
 
+#### ONNX Runtime inference
+
+`--backend onnx` runs the exported `.onnx` file with [ONNX Runtime](https://onnxruntime.ai/) instead of PyTorch. Everything else stays the same: the same commands and options, the same `Detection` records, the same tracking, annotated video and JSON output. PyTorch remains the default, and ONNX inference does not need PyTorch or Ultralytics installed.
+
+```mermaid
+flowchart LR
+    F[BGR frame] --> L[letterbox<br/>resize + grey padding] --> T[RGB, CHW, float32 0-1<br/>1×3×640×640]
+    T --> S[ONNX Runtime session<br/>created once] --> O[output0<br/>1×84×8400]
+    O --> D[best class per candidate<br/>score > conf, class filter] --> N[per-class NMS<br/>IoU > iou removed] --> B[undo padding + scale<br/>clip to frame] --> R[Detection records]
+```
+
+**Install** (CPU; Windows, Linux or macOS):
+
+```bat
+python -m pip install -e ".[dev,vision,onnxruntime]"
+```
+
+That is enough to run an existing `.onnx` file. To export one as well, also install `detector` and `export` (the full command is in [Available now](#available-now)).
+
+**Run** (Windows Command Prompt, from the repository root, after `python scripts\export_onnx.py`):
+
+```bat
+python scripts\detect_image.py data\input\photo.jpg --backend onnx --device cpu
+python scripts\detect_video.py data\input\sample.mp4 --backend onnx --device cpu --json results\sample_onnx.json
+python scripts\detect_video.py data\input\sample.mp4 --backend onnx --tracking --output-video results\sample_onnx_tracked.mp4
+```
+
+- **Model path.** With `--backend onnx`, `--model` defaults to `model.onnx_path` in `configs/default.yaml` (`models/yolov8n.onnx`). Pass `--model path\to\other.onnx` to use another file. The file must already exist; ONNX models are never downloaded.
+- **Input size.** A model exported with a fixed size (the default) only accepts that size. If `--imgsz` (or `model.input_size`) differs, the command stops and says which size to use. Models exported with `--dynamic` accept any multiple of 32.
+- **Guard against mixing backends.** `--backend pytorch` with an `.onnx` file, or `--backend onnx` with a `.pt` file, is refused (exit 2). Ultralytics would otherwise load an `.onnx` file through ONNX Runtime while EdgeVision reported "pytorch".
+
+**Execution providers.** ONNX Runtime runs a model through an *execution provider*: `CPUExecutionProvider` on the processor, `CUDAExecutionProvider` on an NVIDIA GPU. EdgeVision always requests providers explicitly:
+
+| `--device` | Requested | If CUDA is not usable |
+|------------|-----------|-----------------------|
+| `cpu` | CPU only | n/a |
+| `auto` (default) | CUDA then CPU if this ONNX Runtime build offers CUDA, else CPU | Runs on the CPU and logs a warning |
+| `cuda` | CUDA then CPU | Stops with an error, never silently uses the CPU |
+
+After loading, EdgeVision asks the session which providers it **actually** activated. ONNX Runtime silently falls back to the CPU when the CUDA libraries are missing; EdgeVision detects this and reports `device: cpu`. The summary line shows the active providers, e.g. `ONNX Runtime 1.31.0, providers: CPUExecutionProvider, device: cpu`, and JSON results record them as `execution_providers`. `python -m edgevision.device` lists the providers your installation offers.
+
+**GPU runtime (not tested in this project).** The `onnxruntime` package is CPU-only. On a machine with an NVIDIA GPU, replace it with the GPU build, which also includes the CPU provider:
+
+```bat
+python -m pip uninstall -y onnxruntime
+python -m pip install -e ".[onnxruntime-gpu]"
+python -m edgevision.device
+```
+
+Never install both: they contain the same `onnxruntime` module and overwrite each other. `onnxruntime-gpu` also needs CUDA and cuDNN versions that match its release (see the ONNX Runtime documentation). If they are missing, `--device cuda` fails with an explanation and `--device auto` runs on the CPU. No GPU was available to test this path here.
+
+**Supported models.** YOLO detection models exported by `scripts/export_onnx.py`, with:
+
+- one float32 input `(batch, 3, H, W)` with batch 1 or dynamic, and a square size, fixed or dynamic;
+- class names in the file's metadata (Ultralytics writes them);
+- one output in either of two layouts:
+  - **raw** `(1, 4 + classes, candidates)`, the default export, e.g. `(1, 84, 8400)`. EdgeVision applies the threshold and class filter, then per-class NMS.
+  - **NMS included** `(1, N, 6)` with rows `x1, y1, x2, y2, score, class` (Ultralytics `nms=True`, or end-to-end models). Only the threshold and class filter are applied, so NMS never runs twice. The IoU threshold and the 300-box limit were fixed at export time, so `--iou` has no effect; EdgeVision logs this.
+
+Anything else, including FP16/INT8 inputs, segmentation or pose models, or other output shapes, is rejected when the model loads, with a message saying why.
+
+##### Preprocessing and postprocessing, step by step
+
+The PyTorch backend lets Ultralytics prepare frames and interpret the output. ONNX Runtime only runs the network, so EdgeVision does those steps itself, following Ultralytics' rules exactly:
+
+1. **Letterbox.** The network expects a square image, e.g. 640×640. The frame is shrunk (or enlarged) by the same factor in both directions, so a 1024×576 frame becomes 640×360. Rows of grey (114) pad it to 640×640: 140 above and 140 below. Stretching the frame instead would distort object shapes.
+2. **Colour order and layout.** OpenCV stores pixels as BGR; the model was trained on RGB, so the channels are reversed. The array is reordered from height×width×channels to channels×height×width, the layout the network uses.
+3. **Scaling.** Pixel values 0–255 become float32 values 0–1, and a batch dimension is added: `1×3×640×640`.
+4. **Decoding.** The raw output holds 8,400 candidate boxes, from grids of 80×80, 40×40 and 20×20 cells. Each has 4 box values (centre x, centre y, width, height, in input pixels) and 80 class scores. For each candidate, the best class is kept. Candidates whose score is not above `--conf` are dropped, and so are classes outside the class filter.
+5. **Non-maximum suppression.** Neighbouring candidates often describe the same object. Starting with the highest score, any box of the **same class** that overlaps a kept box by more than `--iou` (intersection over union) is removed. At most 300 boxes are kept.
+6. **Back to the original frame.** The padding is subtracted, coordinates are divided by the scale factor, and boxes are clipped to the frame. The result is `x1, y1, x2, y2` in original pixels, like every other backend.
+
+Tests compare steps 1 and 4–5 with Ultralytics' own code on random inputs, and the opt-in real test compares the full ONNX backend with Ultralytics running the same `.onnx` file.
+
+##### Why PyTorch and ONNX results differ slightly
+
+With the same frame, the two backends can return slightly different boxes, scores, or even a different number of detections. This was traced to one difference in preprocessing:
+
+- **PyTorch backend** (Ultralytics with a `.pt` model): pads only up to the next multiple of 32. A 1024×576 frame becomes a 640×384 input.
+- **ONNX backend**: the exported model has a fixed 640×640 input, so the frame is padded to a full square.
+
+The network sees a different image, so its output differs slightly. When PyTorch was given the same square input in a check on Linux, the two agreed to within 0.0001 px on boxes and 10⁻⁶ on scores on three test images. On the 113-frame sample clip with default settings, the ONNX backend reported 426 detections and the PyTorch backend 395. Neither number is more correct: there are no ground-truth labels.
+
+The PyTorch backend was deliberately left unchanged. Comparing the backends with identical inputs and agreed tolerances is part of the benchmarking work.
+
+**Smoke test** (real model, CPU; needs `vision`, `detector` and `onnxruntime`, and `models/yolov8n.onnx`). This checks EdgeVision's ONNX backend against Ultralytics running the same file:
+
+```bat
+set EDGEVISION_RUN_MODEL_TESTS=1
+python -m pytest tests\test_onnx_backend.py -m model -v
+set EDGEVISION_RUN_MODEL_TESTS=
+```
+
 #### Tests
 
-`python -m pytest` runs unit tests in which OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Tests that need an optional package that is not installed are reported as *skipped*, not passed. Four additional tests run the genuine YOLOv8n model: on a photo bundled with Ultralytics, on a short video built from that photo, on that video with real ByteTrack, and a real ONNX export at 320×320 followed by validation (written to a temporary folder). They are opt-in, and need the `detector` extra (plus `tracking` and `export` for those tests) and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
+`python -m pytest` runs unit tests in which OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Tests that need an optional package that is not installed are reported as *skipped*, not passed. Five additional tests use the genuine YOLOv8n model: on a photo bundled with Ultralytics, on a short video built from that photo, on that video with real ByteTrack, a real ONNX export at 320×320 followed by validation (written to a temporary folder), and the exported `models/yolov8n.onnx` on ONNX Runtime compared with Ultralytics running the same file. They are opt-in, and need the `detector` extra (plus `tracking`, `export` and `onnxruntime` for those tests) and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
 
 ```bash
 # Linux / macOS
@@ -515,9 +619,6 @@ python -m pytest -m model -v
 > **Forthcoming.** These commands show the intended interface and do not work yet.
 
 ```bash
-# Process a video with a chosen backend (PyTorch or ONNX Runtime), with tracking and annotated output
-python scripts/run_video.py --input data/input/sample.mp4 --backend pytorch --output results/annotated_pytorch.mp4
-
 # Benchmark backends on identical frames
 python scripts/benchmark.py --input data/input/sample.mp4 --backends pytorch onnx_cpu --warmup 20 --frames 300 --runs 3 --output results/benchmark
 
@@ -541,7 +642,7 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [x] Multi-object tracking with ByteTrack (optional, `--tracking`)
 - [x] ONNX export with structural validation (ONNX checker, input/output shapes)
 - [ ] Numerical agreement between ONNX and PyTorch outputs (finite values, tolerances)
-- [ ] ONNX Runtime CPU backend
+- [x] ONNX Runtime CPU backend (`--backend onnx`)
 - [ ] Benchmark runner with JSON / CSV export
 - [ ] Plot generation from saved results
 - [ ] CPU-only unit and integration tests
@@ -555,8 +656,10 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 
 ## Known limitations
 
-- There is no ONNX Runtime backend or benchmarking yet. The ONNX file is checked structurally only; nobody has yet compared its outputs with PyTorch's, so its detections are unverified.
-- ONNX export has been run for real on Linux only (CPU). The exported graph has no NMS, a fixed 640×640 input unless `--dynamic` is used, and FP32 weights.
+- There is no benchmarking yet; no speed figures have been measured for either backend.
+- PyTorch and ONNX outputs have been compared only on a few images (see [Why PyTorch and ONNX results differ slightly](#why-pytorch-and-onnx-results-differ-slightly)); there is no systematic comparison with tolerances over a dataset.
+- ONNX export and ONNX Runtime inference have been run for real on Linux only (CPU). The ONNX Runtime CUDA path has not been run: no NVIDIA GPU was available.
+- The ONNX backend handles one frame at a time (batch 1), float32 models only (no FP16/INT8), and square inputs.
 - Tracking quality is not measured: there are no ground-truth track annotations, so no HOTA/MOTA/IDF1. Track IDs are only consistent within one run and are not persistent identities.
 - Only ByteTrack is supported. Detections pass through the detector's confidence threshold (0.25 by default) before tracking, so ByteTrack's low-score second pass only sees detections above that; Ultralytics' own `model.track()` lowers the threshold to 0.1 for this reason. A lower `--conf` gives the tracker more to work with, but also adds more low-confidence detections to the output.
 - Annotated videos use `mp4v`, which some web browsers cannot play. Source videos with an odd width or height cannot be written (OpenCV would crop them).

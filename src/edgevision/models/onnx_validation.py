@@ -67,16 +67,27 @@ class OnnxModelInfo:
     @property
     def class_names(self) -> dict[int, str] | None:
         """Class names stored by Ultralytics in the metadata, if present and readable."""
-        raw = self.metadata.get("names")
-        if raw is None:
-            return None
-        try:
-            names = ast.literal_eval(raw)  # a Python dict literal written by Ultralytics; never executed
-        except (ValueError, SyntaxError):
-            return None
-        if isinstance(names, dict) and all(isinstance(k, int) and isinstance(v, str) for k, v in names.items()):
-            return names
+        return parse_class_names(self.metadata.get("names"))
+
+
+def parse_class_names(raw: str | None) -> dict[int, str] | None:
+    """Parse the ``names`` metadata Ultralytics stores in an ONNX file.
+
+    It is a Python dict literal such as ``"{0: 'person', 1: 'bicycle'}"``. It is
+    parsed with ``ast.literal_eval``, which only accepts literals and never
+    runs code. Returns None if it is missing or not a ``{int: str}`` dict.
+    """
+    if not isinstance(raw, str):
         return None
+    try:
+        names = ast.literal_eval(raw)
+    except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        return None
+    if isinstance(names, dict) and all(
+        isinstance(k, int) and not isinstance(k, bool) and isinstance(v, str) for k, v in names.items()
+    ):
+        return names
+    return None
 
 
 def _tensor_info(onnx: Any, value_info: Any) -> TensorInfo:
