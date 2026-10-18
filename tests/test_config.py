@@ -56,20 +56,20 @@ def test_default_config_loads() -> None:
     assert config.model.input_size == 640
     assert isinstance(config.model.weights, Path)
     assert config.model.classes is None
-    assert config.benchmark.backends == ("pytorch", "onnx_cpu")
-    assert config.benchmark.batch_size == 1
+    assert config.benchmark.scope == "detector"
+    assert config.benchmark.warmup == 20 and config.benchmark.iterations == 300 and config.benchmark.runs == 3
 
 
 def test_valid_config_from_temporary_file(tmp_path: Path, default_data: dict) -> None:
     default_data["model"]["classes"] = [0, 2]
     default_data["video"]["max_frames"] = None
-    default_data["benchmark"]["backends"] = ["onnx_cuda"]
+    default_data["benchmark"]["scope"] = "pipeline"
 
     config = load_config(write_yaml(tmp_path, default_data))
 
     assert config.model.classes == (0, 2)
     assert config.video.max_frames is None
-    assert config.benchmark.backends == ("onnx_cuda",)
+    assert config.benchmark.scope == "pipeline"
 
 
 def test_load_config_accepts_string_path(default_data: dict, tmp_path: Path) -> None:
@@ -203,17 +203,12 @@ def test_unknown_section_is_rejected(tmp_path: Path, default_data: dict) -> None
         ("video", "max_frames", 0, "video.max_frames must be an integer >= 1, or null"),
         ("tracking", "tracker", "sort", "tracking.tracker must be one of ['bytetrack']"),
         ("output", "overwrite", 1, "output.overwrite must be true or false"),
-        ("benchmark", "backends", [], "benchmark.backends must be a non-empty list"),
-        ("benchmark", "backends", ["tensorrt"], "benchmark.backends must be a non-empty list"),
-        ("benchmark", "backends", ["pytorch", "pytorch"], "without repeats"),
-        ("benchmark", "backends", "pytorch", "benchmark.backends must be a non-empty list"),
+        ("benchmark", "scope", "model_only", "benchmark.scope must be one of ['detector', 'pipeline']"),
         ("benchmark", "device", "gpu", "benchmark.device must be one of ['auto', 'cpu', 'cuda']"),
-        ("benchmark", "scopes", ["full"], "benchmark.scopes must be a non-empty list"),
         ("benchmark", "warmup", -1, "benchmark.warmup must be an integer >= 0"),
-        ("benchmark", "frames", 0, "benchmark.frames must be an integer >= 1"),
+        ("benchmark", "iterations", 0, "benchmark.iterations must be an integer >= 1"),
         ("benchmark", "runs", 2.5, "benchmark.runs must be an integer >= 1"),
-        ("benchmark", "batch_size", 0, "benchmark.batch_size must be an integer >= 1"),
-        ("benchmark", "precision", "int8", "benchmark.precision must be one of ['fp32', 'fp16']"),
+        ("benchmark", "preload_frames", 0, "benchmark.preload_frames must be an integer >= 1"),
     ],
 )
 def test_invalid_values_are_rejected(

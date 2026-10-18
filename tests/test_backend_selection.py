@@ -226,3 +226,51 @@ def test_video_with_onnx_input_size_mismatch(fake_ort, video: Path, onnx_file: P
     err = capsys.readouterr().err
     assert "--imgsz 320" in err and "No output files were written" in err
     assert not out.exists()
+
+
+# --- options used by benchmarks ----------------------------------------------------------------
+
+
+def test_pytorch_letterbox_option(fake_yolo) -> None:
+    import numpy as np
+
+    frame = np.zeros((48, 64, 3), np.uint8)
+    default = PytorchYoloDetector("models/yolov8n.pt", device="cpu")
+    default.detect(frame)
+    assert default.letterbox == "minimal" and "rect" not in fake_yolo.predict_calls[-1]  # unchanged default call
+    square = create_detector("pytorch", "models/yolov8n.pt", device="cpu", letterbox="square")
+    square.detect(frame)
+    assert square.letterbox == "square" and fake_yolo.predict_calls[-1]["rect"] is False
+    with pytest.raises(ValueError, match="letterbox must be one of"):
+        PytorchYoloDetector("models/yolov8n.pt", letterbox="stretch")
+
+
+def test_pytorch_stage_timings_come_from_ultralytics(fake_yolo, monkeypatch) -> None:
+    import numpy as np
+
+    detector = PytorchYoloDetector("models/yolov8n.pt", device="cpu")
+    assert detector.last_timings is None
+    detector.detect(np.zeros((48, 64, 3), np.uint8))
+    assert detector.last_timings is None  # the fake result reports no speed: nothing is invented
+    original = fake_yolo.make_result
+
+    def with_speed():
+        result = original()
+        result.speed = {"preprocess": 1.5, "inference": 20.0, "postprocess": 0.5}
+        return result
+
+    monkeypatch.setattr(fake_yolo, "make_result", with_speed)
+    detector.detect(np.zeros((48, 64, 3), np.uint8))
+    assert detector.last_timings == {"preprocess_ms": 1.5, "inference_ms": 20.0, "postprocess_ms": 0.5}
+
+
+def test_onnx_stage_timings(fake_ort, cv2, onnx_file: Path) -> None:
+    import numpy as np
+
+    detector = create_detector("onnx", onnx_file, device="cpu", letterbox="square")
+    assert detector.last_timings is None
+    detector.detect(np.zeros((48, 64, 3), np.uint8))
+    assert set(detector.last_timings) == {"preprocess_ms", "inference_ms", "postprocess_ms"}
+    assert all(v >= 0 for v in detector.last_timings.values())
+    with pytest.raises(ValueError, match="always pads frames"):
+        create_detector("onnx", onnx_file, letterbox="minimal")

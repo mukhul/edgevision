@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, optional multi-object tracking with ByteTrack (track IDs in the video and JSON), export of the model to ONNX with structural validation, and an ONNX Runtime backend (`--backend onnx`) that runs the exported model on the CPU through the same pipeline. GPU execution has not been tested, and there is no systematic PyTorch-vs-ONNX accuracy comparison or benchmarking yet. **No benchmark results have been recorded.** Everything described below as *planned* is the design target, not existing functionality.
+> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, optional multi-object tracking with ByteTrack (track IDs in the video and JSON), export of the model to ONNX with structural validation, an ONNX Runtime backend (`--backend onnx`) that runs the exported model on the CPU through the same pipeline, and a benchmarking tool that measures initialisation time, per-frame latency and throughput of either backend and saves the measurements as JSON. GPU execution has not been tested, and there is no systematic PyTorch-vs-ONNX accuracy comparison yet. **No benchmark results have been recorded in this repository.** Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -32,9 +32,9 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Object detection — ONNX Runtime CUDA (when available) | ✅ | code path only, untested ⁶ | — |
 | Multi-object tracking (ByteTrack, optional) | ✅ | ✅ ⁴ | n/a |
 | Annotated output video (boxes, class names, confidences) | ✅ | ✅ ³ | n/a |
-| Latency / throughput benchmark runner | ✅ | — | — |
+| Latency / throughput benchmark runner | ✅ | ✅ ⁷ | — |
 | Detection-quality evaluation (ground truth) | ✅ | — | — |
-| Tests for the pipeline, backends, and benchmarks | ✅ | — | n/a |
+| Tests for the pipeline, backends, and benchmarks | ✅ | ✅ | n/a |
 
 - **Planned** — described in the project specification; not yet built.
 - **Implemented** — exists in this repository and is covered by passing tests.
@@ -51,6 +51,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 ⁵ Covered by mocked unit tests (Ultralytics and `onnx` replaced by fakes), tests on small real ONNX files built with the `onnx` package, and an opt-in real-model test that exports `yolov8n.pt` at 320×320 and validates it. The command was also run for real on Linux (CPU; PyTorch 2.14.1, Ultralytics 8.4.178, onnx 1.23.2): `models/yolov8n.onnx` (12,851,106 bytes, opset 18) passed the official ONNX checker with input `images` FLOAT `[1, 3, 640, 640]` and output `output0` FLOAT `[1, 84, 8400]`. This shows the file is well-formed, **not** that it gives the same detections as PyTorch; that comparison is a later step.
 
 ⁶ Covered by unit tests with a fake ONNX Runtime session and synthetic model outputs, by tests that compare EdgeVision's letterbox and NMS code with Ultralytics' own implementations on random inputs, by command tests, and by an opt-in real CPU test. Run for real on Linux (CPU, ONNX Runtime 1.31.0): on three test images EdgeVision's ONNX backend gave the same detections as Ultralytics running the same `.onnx` file (largest box difference below 0.0001 px). It also gave the same detections as the PyTorch model **when both used the same square 640×640 input** (largest box difference 0.0001 px, score difference below 10⁻⁶). With default settings the two backends do differ, because the PyTorch backend pads frames to a smaller rectangle; see [Why PyTorch and ONNX results differ slightly](#why-pytorch-and-onnx-results-differ-slightly). The CUDA provider path is implemented and unit-tested with fakes, but no NVIDIA GPU was available to run it.
+
+⁷ Covered by tests with a fake clock and fake detectors (exact checks of which intervals count towards which metric), tests of the statistics against NumPy, schema and command tests, and an opt-in real CPU smoke benchmark of both backends. It was also run for real on Linux (CPU) with both backends and the default settings, to check that it works end to end. Those timings come from a shared cloud machine and are deliberately not published; no results are recorded in [`docs/experiment_log.md`](docs/experiment_log.md) yet, hence the empty *Benchmarked* column.
 
 **What exists today:**
 
@@ -71,6 +73,7 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - `scripts/export_onnx.py` (export, then validate) and `scripts/inspect_onnx.py` (validate and describe an existing `.onnx` file).
 - `edgevision.models.onnx_backend`: `OnnxYoloDetector` runs an exported `.onnx` model with ONNX Runtime behind the same `Detector` interface, with explicit execution-provider selection and its own preprocessing, decoding and NMS. It does not need PyTorch or Ultralytics.
 - `--backend pytorch|onnx` in `detect_image.py` and `detect_video.py` (PyTorch stays the default). Tracking, annotated video and JSON output work with either backend.
+- `edgevision.benchmarks` and `scripts/benchmark.py`: timed runs of either backend with warm-up, repeated runs, separate initialisation / first-inference / per-frame latency / throughput measurements, latency statistics, and a JSON result with the full environment. `scripts/compare_benchmarks.py` shows results side by side and lists the settings that differ.
 - pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes in unit tests. A few integration tests use real OpenCV or ONNX when installed, and opt-in tests run the real YOLOv8n model.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
@@ -142,6 +145,11 @@ edgevision/
 ├── src/
 │   └── edgevision/
 │       ├── __init__.py      # package marker and version
+│       ├── benchmarks/
+│       │   ├── __init__.py
+│       │   ├── runner.py    # timed warm-up/measured iterations, detector and pipeline scopes
+│       │   ├── stats.py     # mean, percentiles, stdev, throughput
+│       │   └── report.py    # JSON schema, environment metadata, summary, comparison
 │       ├── config.py        # YAML loading and validation
 │       ├── device.py        # environment / hardware report
 │       ├── optional.py      # helpful errors for missing optional packages
@@ -167,6 +175,8 @@ edgevision/
 │           └── writer.py    # validated, all-or-nothing video file writing
 ├── scripts/
 │   ├── README.md            # CLI entry points (implemented and planned)
+│   ├── benchmark.py         # time a backend and save the measurements as JSON
+│   ├── compare_benchmarks.py  # show result files side by side
 │   ├── detect_image.py      # run the detector on one image
 │   ├── detect_video.py      # run the detector on every frame of a video
 │   ├── export_onnx.py       # export the model to ONNX and validate it
@@ -180,6 +190,10 @@ edgevision/
 │   ├── test_detect_image.py
 │   ├── test_annotator.py
 │   ├── test_backend_selection.py
+│   ├── test_benchmark_report.py
+│   ├── test_benchmark_runner.py
+│   ├── test_benchmark_scripts.py
+│   ├── test_benchmark_stats.py
 │   ├── test_detect_video.py
 │   ├── test_detection.py
 │   ├── test_export.py
@@ -196,7 +210,7 @@ edgevision/
 │   └── test_video_reader.py
 ├── docs/
 │   ├── architecture.md      # planned components and data flow
-│   ├── benchmarking.md      # planned timing methodology
+│   ├── benchmarking.md      # benchmark methodology, metrics and fair comparison
 │   └── experiment_log.md    # empty until experiments are run
 ├── data/
 │   ├── README.md
@@ -207,18 +221,16 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned modules under `src/edgevision/` (added only as they are implemented): `benchmarks/` (timing, runner, metrics, report), and `evaluation/`.
+Planned module under `src/edgevision/` (added only when implemented): `evaluation/`.
 
-## Planned benchmark methodology
+## Benchmark methodology
 
-- **Two scopes, reported separately:** model-only inference, and end-to-end frame processing with the included stages (decode, preprocess, inference, postprocess, tracking, rendering) stated explicitly.
-- **Phases kept apart:** model load time, warm-up time, and steady-state latency are recorded separately; load and warm-up never enter steady-state statistics.
-- **Correct GPU timing:** CUDA work is synchronized before the clock is read; ONNX Runtime results state which execution provider was actually active.
-- **Statistics:** mean, median, p90, p95 per run; throughput as frames ÷ measured wall-clock interval, reported separately from `1 / mean latency`.
-- **Fairness:** identical weights, input resolution, thresholds, class filter, video, frame sequence, warm-up count, and frame count across backends; batch size 1 by default.
-- **Repetition:** at least three runs per configuration where compute permits, with variation reported — never just the best run.
-- **Quality:** precision / recall / F1 (and mAP only where the protocol supports it) against ground-truth annotations; without ground truth, only backend-agreement diagnostics, which are explicitly **not** accuracy.
-- **Traceability:** every result records its config, git commit, hardware, OS, library versions, and execution provider.
+- **Phases kept apart:** library import, model/session initialisation, the first inference, warm-up and steady-state latency are measured and reported separately. Initialisation and warm-up never enter the latency statistics.
+- **Two scopes, never mixed:** `detector` times `detect()` on frames already in memory (preprocess + inference + postprocess, with the per-stage split), so video decoding is never counted as inference. `pipeline` times video decoding, detection and tracking per frame, each separately.
+- **Statistics:** count, mean, median, p90, p95, min, max and standard deviation per run and pooled over runs; throughput measured over the measured loop, never derived from the mean latency. Raw samples are kept.
+- **Repetition:** several independent runs (default 3), each with a freshly loaded model; the spread between runs is reported, never just the best run.
+- **Fairness:** same input, settings, iteration counts and input tensor (PyTorch uses square padding in benchmarks, like the ONNX model); detection counts confirm that both backends did the same work.
+- **Traceability:** every result records its settings, input and model (SHA-256), hardware, OS, library versions, actual device/execution providers and git commit, without absolute paths.
 
 Details: [`docs/benchmarking.md`](docs/benchmarking.md).
 
@@ -592,9 +604,38 @@ python -m pytest tests\test_onnx_backend.py -m model -v
 set EDGEVISION_RUN_MODEL_TESTS=
 ```
 
+#### Benchmarking
+
+`scripts/benchmark.py` measures one backend at a time and saves a JSON result. Defaults come from the `benchmark` section of `configs/default.yaml`: the config's video, 20 warm-up + 300 measured iterations, 3 runs, detector scope. Windows (Command Prompt):
+
+```bat
+python scripts\benchmark.py --backend pytorch --device cpu --output results\benchmarks\pytorch_cpu.json
+python scripts\benchmark.py --backend onnx --device cpu --output results\benchmarks\onnx_cpu.json
+python scripts\compare_benchmarks.py results\benchmarks\pytorch_cpu.json results\benchmarks\onnx_cpu.json
+```
+
+- `--warmup N`, `--iterations N` and `--runs N` set the counts (e.g. `--warmup 5 --iterations 50 --runs 1` for a quick check).
+- `--scope pipeline [--tracking]` times decoding, detection and tracking per video frame.
+- An image works too: `python scripts\benchmark.py photo.jpg --backend onnx`.
+- `--model`, `--imgsz`, `--conf` and `--iou` work as in the detection commands. Models are never downloaded.
+
+| Reported | Meaning |
+|----------|---------|
+| Library import | Importing PyTorch + Ultralytics or ONNX Runtime, once per command |
+| Initialisation | Loading the model / creating the session, per run |
+| First inference | The first `detect()` call, usually slow; not in the statistics |
+| `detect` latency | One `detect()` call on a frame in memory: preprocess + inference + postprocess |
+| `preprocess` / `inference` / `postprocess` | The same calls split into stages (ONNX: measured by EdgeVision; PyTorch: by Ultralytics) |
+| Throughput | Measured frames ÷ wall time of the measured loop, one frame at a time |
+
+> [!WARNING]
+> Benchmark numbers depend on the hardware, power mode, temperature, background load, operating system, library versions, model, input and settings. A result describes that one machine and configuration. On this project's laptop (AMD Ryzen 7 5700U, no NVIDIA GPU) only CPU results are possible.
+
+The full methodology, metric definitions and the fair-comparison procedure are in [`docs/benchmarking.md`](docs/benchmarking.md); the result schema is in [`results/README.md`](results/README.md).
+
 #### Tests
 
-`python -m pytest` runs unit tests in which OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Tests that need an optional package that is not installed are reported as *skipped*, not passed. Five additional tests use the genuine YOLOv8n model: on a photo bundled with Ultralytics, on a short video built from that photo, on that video with real ByteTrack, a real ONNX export at 320×320 followed by validation (written to a temporary folder), and the exported `models/yolov8n.onnx` on ONNX Runtime compared with Ultralytics running the same file. They are opt-in, and need the `detector` extra (plus `tracking`, `export` and `onnxruntime` for those tests) and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
+`python -m pytest` runs unit tests in which OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Tests that need an optional package that is not installed are reported as *skipped*, not passed. Six additional tests use the genuine YOLOv8n model: on a photo bundled with Ultralytics, on a short video built from that photo, on that video with real ByteTrack, a real ONNX export at 320×320 followed by validation (written to a temporary folder), the exported `models/yolov8n.onnx` on ONNX Runtime compared with Ultralytics running the same file, and a tiny real benchmark of both backends (checks the result files, not the speed). They are opt-in, and need the `detector` extra (plus `tracking`, `export` and `onnxruntime` for those tests) and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
 
 ```bash
 # Linux / macOS
@@ -619,10 +660,7 @@ python -m pytest -m model -v
 > **Forthcoming.** These commands show the intended interface and do not work yet.
 
 ```bash
-# Benchmark backends on identical frames
-python scripts/benchmark.py --input data/input/sample.mp4 --backends pytorch onnx_cpu --warmup 20 --frames 300 --runs 3 --output results/benchmark
-
-# Plot saved results
+# Plot saved benchmark results
 python scripts/plot_results.py --input results/benchmark --output results/plots
 ```
 
@@ -634,7 +672,7 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [x] Installable package with a pytest setup
 - [x] Configuration loading and validation
 - [x] Hardware / software environment report
-- [ ] Device and execution-provider selection for inference backends
+- [x] Device and execution-provider selection for inference backends (`auto` / `cpu` / `cuda`)
 - [x] Video reader with frame limit and robust error handling
 - [x] Detection interface and PyTorch detection backend (single frame)
 - [x] Run detection on video frames, with processing summary and JSON export
@@ -643,20 +681,20 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [x] ONNX export with structural validation (ONNX checker, input/output shapes)
 - [ ] Numerical agreement between ONNX and PyTorch outputs (finite values, tolerances)
 - [x] ONNX Runtime CPU backend (`--backend onnx`)
-- [ ] Benchmark runner with JSON / CSV export
+- [x] Benchmark runner with JSON results and a comparison command
 - [ ] Plot generation from saved results
-- [ ] CPU-only unit and integration tests
+- [x] CPU-only unit and integration tests
 - [ ] ONNX Runtime CUDA backend (verified execution provider)
 - [ ] Detection-quality evaluation on an annotated dataset
 - [ ] First recorded benchmarks (Experiments A–E in [`docs/experiment_log.md`](docs/experiment_log.md))
 
 ## Benchmark results
 
-None yet. Results will be published in [`docs/experiment_log.md`](docs/experiment_log.md) only after they have been measured, together with the hardware, software versions, and configuration that produced them.
+None recorded yet. The benchmarking tool exists, but results will be published in [`docs/experiment_log.md`](docs/experiment_log.md) only after they have been measured on the project's own hardware, together with the hardware, software versions, and configuration that produced them.
 
 ## Known limitations
 
-- There is no benchmarking yet; no speed figures have been measured for either backend.
+- No benchmark results are recorded yet. Benchmarks are batch size 1 and FP32 only, use each library's default thread count, do not measure memory, and do not control power mode or temperature.
 - PyTorch and ONNX outputs have been compared only on a few images (see [Why PyTorch and ONNX results differ slightly](#why-pytorch-and-onnx-results-differ-slightly)); there is no systematic comparison with tolerances over a dataset.
 - ONNX export and ONNX Runtime inference have been run for real on Linux only (CPU). The ONNX Runtime CUDA path has not been run: no NVIDIA GPU was available.
 - The ONNX backend handles one frame at a time (batch 1), float32 models only (no FP16/INT8), and square inputs.
@@ -667,7 +705,7 @@ None yet. Results will be published in [`docs/experiment_log.md`](docs/experimen
 - Real model inference has been verified on Linux (CPU). GPU (CUDA) inference has not been tested: no NVIDIA GPU was available.
 - The first use of an official model name (e.g. `yolov8n.pt`) needs an internet connection to download the weights.
 - Video metadata is what the file *reports*; the frame count in particular can be missing or wrong. OpenCV signals the end of a video and an undecodable frame the same way, so a corrupt file may simply end early (the inspection command flags this when the reported count is larger).
-- The `output` and `benchmarking` sections of `configs/default.yaml` are validated but not yet used; fields may still change as those stages are built.
+- The `output` section of `configs/default.yaml` is validated but not yet used.
 - The environment report shows what the installed frameworks *offer*. Whether inference really runs on a GPU will only be verified once the inference backends exist.
 - Free cloud GPUs vary in model and availability, so any GPU results will apply only to the recorded hardware.
 - ONNX Runtime may not be faster than PyTorch for a given model and device; the project will report whatever is observed.

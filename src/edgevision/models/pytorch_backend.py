@@ -47,6 +47,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEVICES = ("auto", "cpu", "cuda")
+LETTERBOX_MODES = ("minimal", "square")
+
+
+def _stage_timings(speed: Any) -> dict[str, float] | None:
+    """Ultralytics' ``Results.speed`` ({'preprocess': ms, ...}) as EdgeVision stage timings."""
+    if not isinstance(speed, dict):
+        return None
+    try:
+        return {f"{stage}_ms": float(speed[stage]) for stage in ("preprocess", "inference", "postprocess")}
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _load_torch() -> Any:
@@ -93,6 +104,11 @@ class PytorchYoloDetector:
         device: ``"auto"`` (default), ``"cpu"`` or ``"cuda"``.
         settings: Input size, thresholds and class filter. Defaults to
             :class:`DetectionSettings` defaults.
+        letterbox: How Ultralytics pads a frame to the model input.
+            ``"minimal"`` (default, Ultralytics' normal behaviour) pads only to
+            the next multiple of 32, e.g. 1024x576 -> 640x384. ``"square"`` pads
+            to the full ``input_size`` square, exactly like the ONNX backend,
+            so both backends process identical input tensors (used by benchmarks).
 
     Raises:
         MissingDependencyError: PyTorch or Ultralytics is not installed.
@@ -109,7 +125,10 @@ class PytorchYoloDetector:
         *,
         device: str = "auto",
         settings: DetectionSettings | None = None,
+        letterbox: str = "minimal",
     ) -> None:
+        if letterbox not in LETTERBOX_MODES:
+            raise ValueError(f"letterbox must be one of {list(LETTERBOX_MODES)}, got {letterbox!r}")
         if settings is None:
             settings = DetectionSettings()
         if not isinstance(settings, DetectionSettings):
@@ -120,6 +139,12 @@ class PytorchYoloDetector:
         self.settings = settings
         self.model_path = os.fspath(model)
         self.requested_device = device
+        self.letterbox = letterbox
+        #: Stage times of the most recent detect() call in milliseconds, as measured by
+        #: Ultralytics itself (``Results.speed``, time.perf_counter() with GPU synchronisation):
+        #: preprocess (letterbox + tensor), inference (forward pass) and postprocess (NMS,
+        #: scaling boxes, building Ultralytics results). None if Ultralytics reports none.
+        self.last_timings: dict[str, float] | None = None
 
         torch = _load_torch()
         self.device = resolve_device(device, torch)  # before loading: fail fast on bad devices
@@ -166,6 +191,7 @@ class PytorchYoloDetector:
                 classes=list(s.classes) if s.classes is not None else None,
                 device=self.device,
                 verbose=False,  # no per-frame log lines
+                **({"rect": False} if self.letterbox == "square" else {}),
             )
         except Exception as exc:
             raise InferenceError(
@@ -174,6 +200,7 @@ class PytorchYoloDetector:
             ) from exc
         if len(results) != 1:
             raise InferenceError(f"Expected 1 result for 1 frame, got {len(results)}")
+        self.last_timings = _stage_timings(getattr(results[0], "speed", None))
         return self._to_detections(results[0], frame_index)
 
     def _to_detections(self, result: Any, frame_index: int) -> list[Detection]:

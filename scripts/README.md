@@ -10,6 +10,8 @@ Command-line entry points. Run them from the repository root after installing th
 | `detect_video.py` | Run a YOLO detector (`--backend pytorch` or `onnx`, as above) on every frame of a video via `edgevision.pipeline`; print a processing summary (frames processed, frames with/without detections, totals per class; no timing) optionally stream per-frame detections to JSON (schema in `results/README.md`), optionally write an annotated `.mp4` (`--output-video`, with `--fps` to override the frame rate), and optionally track objects across frames with ByteTrack (`--tracking`, `--tracker-config`; needs the `tracking` extra), adding track IDs to the video labels and JSON. Video path, frame limit, model and thresholds default to the config. Needs the `vision` extra plus `detector` or `onnxruntime`. |
 | `export_onnx.py` | Export a local YOLO `.pt` model to ONNX on the CPU (`--model`, `--output`, `--imgsz`, `--opset`, `--dynamic`, `--no-simplify`, `--overwrite`; defaults from the config), then validate the file structurally (`--no-validate` to skip). Never downloads weights and never replaces an existing file without `--overwrite`. Needs the `detector`, `export` and `onnxruntime` extras (`onnxruntime` is not needed with `--no-simplify`). |
 | `inspect_onnx.py` | Validate an existing `.onnx` file with the official ONNX checker and report its opset, inputs, outputs and metadata; `--imgsz N` also checks the input size. Structural only: it does not compare results with PyTorch. Needs the `export` extra (only `onnx` is used). |
+| `benchmark.py` | Time one backend (`--backend pytorch\|onnx`, `--device`) on an image or video: initialisation, first inference, per-frame latency statistics (detect and its preprocess / inference / postprocess stages, or decode / detect / track with `--scope pipeline`) and throughput, over `--runs` runs of `--warmup` + `--iterations` iterations. Saves JSON (default `results/benchmarks/...`, never overwritten without `--overwrite`) and prints a summary. Defaults from the config's `benchmark` and `model` sections. Never downloads models. See `docs/benchmarking.md`. |
+| `compare_benchmarks.py` | Show two or more benchmark JSON files side by side and list every setting that differs. Does not rank the results. |
 | `inspect_video.py` | Report a video's metadata (resolution, FPS, reported frame count, codec), how many frames can actually be decoded, and whether reading stopped at the end of the video or at `--max-frames`. Needs the `vision` extra. |
 
 ```bash
@@ -28,7 +30,12 @@ python scripts/inspect_video.py --help
 python scripts/export_onnx.py
 python scripts/export_onnx.py --imgsz 320 --output models/yolov8n_320.onnx
 python scripts/inspect_onnx.py models/yolov8n.onnx --imgsz 640
+python scripts/benchmark.py --backend pytorch --device cpu --output results/benchmarks/pytorch_cpu.json
+python scripts/benchmark.py --backend onnx --device cpu --output results/benchmarks/onnx_cpu.json
+python scripts/compare_benchmarks.py results/benchmarks/pytorch_cpu.json results/benchmarks/onnx_cpu.json
 ```
+
+`benchmark.py`: `0` success, `1` failure (missing model, input or package, error during a run, output exists), `2` invalid arguments, `130` interrupted (nothing written). `compare_benchmarks.py`: `0`, `1` unreadable file, `2` fewer than two files.
 
 `export_onnx.py` and `inspect_onnx.py`: `0` success, `1` failure (missing model or package, output already exists, export failed, invalid ONNX file, unexpected layout), `2` invalid arguments. `--help` never exports.
 
@@ -38,7 +45,6 @@ Exit status for the other three: `0` success, `1` the input cannot be read or pr
 
 | Script | Purpose |
 |--------|---------|
-| `benchmark.py` | Run repeatable latency/throughput benchmarks across backends |
 | `evaluate.py` | Evaluate detection quality against ground-truth annotations |
 | `plot_results.py` | Generate plots from saved benchmark results |
 

@@ -41,6 +41,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -392,6 +393,7 @@ class OnnxYoloDetector:
     """
 
     backend_name = "onnx"
+    letterbox = "square"  # the frame is always padded to the model's square input
 
     def __init__(
         self,
@@ -412,6 +414,11 @@ class OnnxYoloDetector:
         self.settings = settings
         self.model_path = os.fspath(model)
         self.requested_device = device
+        #: Stage times of the most recent detect() call in milliseconds, measured with
+        #: time.perf_counter(): preprocess (letterbox + tensor), inference (session.run,
+        #: including ONNX Runtime's own input/output copies) and postprocess (decoding, NMS,
+        #: box restoration). Building Detection records is not included. None before the first call.
+        self.last_timings: dict[str, float] | None = None
         self._check_file()
 
         ort = _load_onnxruntime()
@@ -507,7 +514,10 @@ class OnnxYoloDetector:
         layout, s = self.layout, self.settings
         height, width = frame.shape[:2]
 
+        clock = time.perf_counter
+        t0 = clock()
         tensor, box = preprocess(frame, s.input_size, self._cv2)
+        t1 = clock()
         try:
             outputs = session.run([layout.output_name], {layout.input_name: tensor})
         except Exception as exc:
@@ -516,6 +526,7 @@ class OnnxYoloDetector:
                 f"providers {list(self.providers)}): {type(exc).__name__}: {exc}"
             ) from exc
 
+        t2 = clock()
         output = np.asarray(outputs[0])
         if output.ndim != 3 or output.shape[0] != 1:
             raise InferenceError(f"Expected a 3-D output with batch size 1, got shape {output.shape}")
@@ -524,6 +535,10 @@ class OnnxYoloDetector:
         else:
             boxes, scores, class_ids = decode_nms_output(output[0], s)
         boxes = restore_boxes(boxes, box, width, height)
+        t3 = clock()
+        self.last_timings = {
+            "preprocess_ms": (t1 - t0) * 1e3, "inference_ms": (t2 - t1) * 1e3, "postprocess_ms": (t3 - t2) * 1e3,
+        }
         return self._to_detections(boxes, scores, class_ids, frame_index)
 
     def _to_detections(

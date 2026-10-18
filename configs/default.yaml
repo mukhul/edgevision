@@ -8,10 +8,11 @@
 # Every section and field is required; use null where a value is "not set".
 # Unknown fields are rejected so that typos are caught early.
 #
-# Currently used: the `model` section supplies defaults for the detection and
-# export scripts; `video` and `tracking` for scripts/detect_video.py; `export`
-# for scripts/export_onnx.py. The other sections are validated but not yet
-# used (output, benchmarking).
+# Currently used: the `model` section supplies defaults for the detection,
+# export and benchmark scripts; `video` and `tracking` for
+# scripts/detect_video.py (`video.input` also for scripts/benchmark.py);
+# `export` for scripts/export_onnx.py; `benchmark` for scripts/benchmark.py.
+# The `output` section is validated but not yet used.
 
 model:
   name: yolov8n
@@ -39,12 +40,10 @@ output:
   dir: results
   overwrite: false                  # never silently replace earlier results
 
-benchmark:
-  backends: [pytorch, onnx_cpu]     # also planned: onnx_cuda (only if the CUDA EP is available)
+benchmark:                          # defaults for scripts/benchmark.py (batch size 1, FP32 only)
+  scope: detector                   # detector = detect() on frames already in memory; pipeline = decode + detect (+ track)
   device: auto                      # auto | cpu | cuda; a requested device is never silently changed
-  scopes: [model_only, end_to_end]
-  warmup: 20
-  frames: 300
-  runs: 3
-  batch_size: 1
-  precision: fp32
+  warmup: 20                        # iterations per run that are run but excluded from the statistics
+  iterations: 300                   # measured iterations (frames) per run
+  runs: 3                           # independent runs, each with a freshly loaded model
+  preload_frames: 32                # distinct video frames kept in memory for the detector scope

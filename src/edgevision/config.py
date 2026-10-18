@@ -32,11 +32,11 @@ import yaml
 #: expected to be run from the repository root.
 DEFAULT_CONFIG_PATH = Path("configs") / "default.yaml"
 
-BACKENDS = ("pytorch", "onnx_cpu", "onnx_cuda")
 DEVICES = ("auto", "cpu", "cuda")
-SCOPES = ("model_only", "end_to_end")
+#: Benchmark scopes: "detector" times detect() on frames already in memory;
+#: "pipeline" times video decoding + detection (+ tracking) per frame.
+BENCHMARK_SCOPES = ("detector", "pipeline")
 TRACKERS = ("bytetrack",)
-PRECISIONS = ("fp32", "fp16")
 #: YOLO models downsample by 32, so the square input size must be a multiple of it.
 MODEL_STRIDE = 32
 
@@ -91,14 +91,12 @@ class OutputConfig:
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
-    backends: tuple[str, ...]
+    scope: str  # one of BENCHMARK_SCOPES
     device: str
-    scopes: tuple[str, ...]
-    warmup: int
-    frames: int
-    runs: int
-    batch_size: int
-    precision: str
+    warmup: int  # iterations per run excluded from the statistics
+    iterations: int  # measured iterations (frames) per run
+    runs: int  # independent runs, each with a freshly created detector
+    preload_frames: int  # distinct video frames held in memory for the detector scope
 
 
 @dataclass(frozen=True)
@@ -272,22 +270,6 @@ class _Validator:
             self.fail(f"{section}.{key}", f"one of {list(choices)}", value)
         return value
 
-    def choice_list(
-        self, data: dict[str, Any], section: str, key: str, choices: tuple[str, ...]
-    ) -> Any:
-        if key not in data:
-            return None
-        value = data[key]
-        if (
-            isinstance(value, list)
-            and value
-            and all(isinstance(item, str) and item in choices for item in value)
-            and len(set(value)) == len(value)
-        ):
-            return tuple(value)
-        self.fail(f"{section}.{key}", f"a non-empty list without repeats, taken from {list(choices)}", value)
-        return value
-
     def class_ids(self, data: dict[str, Any], section: str, key: str) -> Any:
         if key not in data:
             return None
@@ -353,14 +335,12 @@ def _validate(root: Any, source: str) -> EdgeVisionConfig:
         }
     if (d := v.section(root, "benchmark")) is not None:
         values["benchmark"] = {
-            "backends": v.choice_list(d, "benchmark", "backends", BACKENDS),
+            "scope": v.choice(d, "benchmark", "scope", BENCHMARK_SCOPES),
             "device": v.choice(d, "benchmark", "device", DEVICES),
-            "scopes": v.choice_list(d, "benchmark", "scopes", SCOPES),
             "warmup": v.integer(d, "benchmark", "warmup", minimum=0),
-            "frames": v.integer(d, "benchmark", "frames", minimum=1),
+            "iterations": v.integer(d, "benchmark", "iterations", minimum=1),
             "runs": v.integer(d, "benchmark", "runs", minimum=1),
-            "batch_size": v.integer(d, "benchmark", "batch_size", minimum=1),
-            "precision": v.choice(d, "benchmark", "precision", PRECISIONS),
+            "preload_frames": v.integer(d, "benchmark", "preload_frames", minimum=1),
         }
 
     if v.errors:

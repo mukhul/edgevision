@@ -1,6 +1,6 @@
 # Experiment log
 
-> **No experiments have been executed yet.** Entries will be added only for experiments that have actually been run, with their raw results kept under `results/<experiment_id>/`.
+> **No experiments have been recorded yet.** Entries will be added only for experiments that have actually been run with `scripts/benchmark.py`. Each entry names its result file (kept locally under `results/benchmarks/`, which Git ignores) and copies the key numbers and conditions from it: CPU/GPU, power mode, OS, library versions, backend and execution provider, model input tensor, scope, warm-up × iterations × runs, median and p95 `detect` latency, throughput per run, and any warnings. See [`benchmarking.md`](benchmarking.md).
 
 ## Planned experiments
 

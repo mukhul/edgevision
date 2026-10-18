@@ -42,13 +42,20 @@ def create_detector(
     *,
     device: str = "auto",
     settings: DetectionSettings | None = None,
+    letterbox: str | None = None,
 ) -> Any:
-    """Return a ``PytorchYoloDetector`` or ``OnnxYoloDetector`` (both implement ``Detector``)."""
+    """Return a ``PytorchYoloDetector`` or ``OnnxYoloDetector`` (both implement ``Detector``).
+
+    ``letterbox`` is ``None`` for each backend's normal behaviour, ``"minimal"``
+    (PyTorch only) or ``"square"`` (ONNX always uses the full square input).
+    """
     check_model_matches_backend(backend, model)
     if backend == "onnx":
+        if letterbox not in (None, "square"):
+            raise ValueError("the ONNX backend always pads frames to the model's square input (letterbox 'square')")
         from edgevision.models.onnx_backend import OnnxYoloDetector
 
         return OnnxYoloDetector(model, device=device, settings=settings)
     from edgevision.models.pytorch_backend import PytorchYoloDetector
 
-    return PytorchYoloDetector(model, device=device, settings=settings)
+    return PytorchYoloDetector(model, device=device, settings=settings, letterbox=letterbox or "minimal")
