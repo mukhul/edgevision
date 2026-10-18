@@ -6,7 +6,7 @@
 
 > [!IMPORTANT]
 > **This repository is in early development.**
-> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, optional multi-object tracking with ByteTrack (track IDs in the video and JSON), export of the model to ONNX with structural validation, an ONNX Runtime backend (`--backend onnx`) that runs the exported model on the CPU through the same pipeline, and a benchmarking tool that measures initialisation time, per-frame latency and throughput of either backend and saves the measurements as JSON. GPU execution has not been tested, and there is no systematic PyTorch-vs-ONNX accuracy comparison yet. **No benchmark results have been recorded in this repository.** Everything described below as *planned* is the design target, not existing functionality.
+> Implemented so far: an installable package, validated configuration loading, an environment report, a frame-by-frame video reader, object detection with a pretrained YOLOv8n model on PyTorch, a pipeline that runs detection over every frame of a prerecorded video with a summary and optional JSON output, an annotated copy of the video with boxes, class names and confidences, optional multi-object tracking with ByteTrack (track IDs in the video and JSON), export of the model to ONNX with structural validation, an ONNX Runtime backend (`--backend onnx`) that runs the exported model on the CPU through the same pipeline, a benchmarking tool that measures initialisation time, per-frame latency and throughput of either backend and saves the measurements as JSON, plots and summary tables of those measurements, a comparison of two backends' detections (agreement, not accuracy), and accuracy metrics (precision, recall, F1, COCO mAP) for labelled data you supply. **The repository contains no labelled data, so no accuracy has been measured.** GPU execution has not been tested, and there is no systematic PyTorch-vs-ONNX accuracy comparison yet. **No benchmark results have been recorded in this repository.** Everything described below as *planned* is the design target, not existing functionality.
 
 ## Overview
 
@@ -33,7 +33,9 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 | Multi-object tracking (ByteTrack, optional) | ✅ | ✅ ⁴ | n/a |
 | Annotated output video (boxes, class names, confidences) | ✅ | ✅ ³ | n/a |
 | Latency / throughput benchmark runner | ✅ | ✅ ⁷ | — |
-| Detection-quality evaluation (ground truth) | ✅ | — | — |
+| Detection-quality evaluation (ground truth) | ✅ | ✅ ⁸ tools only, no labelled data | — |
+| Benchmark plots and summary tables | ✅ | ✅ ⁸ | n/a |
+| Detection agreement between backends (no ground truth) | ✅ | ✅ ⁸ | n/a |
 | Tests for the pipeline, backends, and benchmarks | ✅ | ✅ | n/a |
 
 - **Planned** — described in the project specification; not yet built.
@@ -53,6 +55,8 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 ⁶ Covered by unit tests with a fake ONNX Runtime session and synthetic model outputs, by tests that compare EdgeVision's letterbox and NMS code with Ultralytics' own implementations on random inputs, by command tests, and by an opt-in real CPU test. Run for real on Linux (CPU, ONNX Runtime 1.31.0): on three test images EdgeVision's ONNX backend gave the same detections as Ultralytics running the same `.onnx` file (largest box difference below 0.0001 px). It also gave the same detections as the PyTorch model **when both used the same square 640×640 input** (largest box difference 0.0001 px, score difference below 10⁻⁶). With default settings the two backends do differ, because the PyTorch backend pads frames to a smaller rectangle; see [Why PyTorch and ONNX results differ slightly](#why-pytorch-and-onnx-results-differ-slightly). The CUDA provider path is implemented and unit-tested with fakes, but no NVIDIA GPU was available to run it.
 
 ⁷ Covered by tests with a fake clock and fake detectors (exact checks of which intervals count towards which metric), tests of the statistics against NumPy, schema and command tests, and an opt-in real CPU smoke benchmark of both backends. It was also run for real on Linux (CPU) with both backends and the default settings, to check that it works end to end. Those timings come from a shared cloud machine and are deliberately not published; no results are recorded in [`docs/experiment_log.md`](docs/experiment_log.md) yet, hence the empty *Benchmarked* column.
+
+⁸ Accuracy metrics are tested on hand-computed synthetic cases. They give identical AP/mAP to the official COCO evaluation (`pycocotools`) on random synthetic datasets, including crowd regions (an optional test). No accuracy has been measured, because the repository has no labelled data; see [`docs/evaluation.md`](docs/evaluation.md) for how to supply some. The plots and the agreement analysis were run on real result files from the project laptop (AMD Ryzen 7 5700U, CPU).
 
 **What exists today:**
 
@@ -74,6 +78,10 @@ Choosing an inference runtime is an engineering decision that should rest on mea
 - `edgevision.models.onnx_backend`: `OnnxYoloDetector` runs an exported `.onnx` model with ONNX Runtime behind the same `Detector` interface, with explicit execution-provider selection and its own preprocessing, decoding and NMS. It does not need PyTorch or Ultralytics.
 - `--backend pytorch|onnx` in `detect_image.py` and `detect_video.py` (PyTorch stays the default). Tracking, annotated video and JSON output work with either backend.
 - `edgevision.benchmarks` and `scripts/benchmark.py`: timed runs of either backend with warm-up, repeated runs, separate initialisation / first-inference / per-frame latency / throughput measurements, latency statistics, and a JSON result with the full environment. `scripts/compare_benchmarks.py` shows results side by side and lists the settings that differ.
+- `edgevision.evaluation` and three commands:
+  - `scripts/plot_benchmarks.py` validates benchmark files and draws latency, throughput, stage and distribution plots, plus a summary table;
+  - `scripts/compare_detections.py` measures how closely two detection runs agree;
+  - `scripts/evaluate.py` computes precision, recall, F1 and COCO-style AP/mAP against COCO-format ground truth.
 - pytest tests for all of the above. They need no GPU, network, or ML packages; OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes in unit tests. A few integration tests use real OpenCV or ONNX when installed, and opt-in tests run the real YOLOv8n model.
 - A `.gitignore` that keeps weights, videos and results out of Git, and design documents for the architecture and benchmarking methodology.
 
@@ -151,6 +159,12 @@ edgevision/
 │       │   ├── stats.py     # mean, percentiles, stdev, throughput
 │       │   └── report.py    # JSON schema, environment metadata, summary, comparison
 │       ├── config.py        # YAML loading and validation
+│       ├── evaluation/
+│       │   ├── __init__.py
+│       │   ├── agreement.py # compare two detect_video JSON files (not accuracy)
+│       │   ├── annotations.py  # COCO JSON ground truth loader
+│       │   ├── benchmark_plots.py  # validate benchmark JSON, plots, summary.md
+│       │   └── detection_metrics.py  # IoU, matching, P/R/F1, COCO AP/mAP, agreement
 │       ├── device.py        # environment / hardware report
 │       ├── optional.py      # helpful errors for missing optional packages
 │       ├── tracking/
@@ -177,6 +191,9 @@ edgevision/
 │   ├── README.md            # CLI entry points (implemented and planned)
 │   ├── benchmark.py         # time a backend and save the measurements as JSON
 │   ├── compare_benchmarks.py  # show result files side by side
+│   ├── compare_detections.py  # agreement between two detection runs
+│   ├── evaluate.py          # accuracy against labelled images (COCO JSON)
+│   ├── plot_benchmarks.py   # plots and summary table from benchmark files
 │   ├── detect_image.py      # run the detector on one image
 │   ├── detect_video.py      # run the detector on every frame of a video
 │   ├── export_onnx.py       # export the model to ONNX and validate it
@@ -193,7 +210,11 @@ edgevision/
 │   ├── test_benchmark_report.py
 │   ├── test_benchmark_runner.py
 │   ├── test_benchmark_scripts.py
+│   ├── test_annotations.py
+│   ├── test_benchmark_plots.py
 │   ├── test_benchmark_stats.py
+│   ├── test_detection_metrics.py
+│   ├── test_evaluation_scripts.py
 │   ├── test_detect_video.py
 │   ├── test_detection.py
 │   ├── test_export.py
@@ -211,6 +232,7 @@ edgevision/
 ├── docs/
 │   ├── architecture.md      # planned components and data flow
 │   ├── benchmarking.md      # benchmark methodology, metrics and fair comparison
+│   ├── evaluation.md        # plots, agreement, accuracy metrics and labelled-data format
 │   └── experiment_log.md    # empty until experiments are run
 ├── data/
 │   ├── README.md
@@ -221,7 +243,6 @@ edgevision/
     └── README.md            # benchmark outputs (git-ignored)
 ```
 
-Planned module under `src/edgevision/` (added only when implemented): `evaluation/`.
 
 ## Benchmark methodology
 
@@ -250,6 +271,7 @@ Optional extras keep the base install light. Install only what you need:
 | `tracking` | Ultralytics, `lap` | ByteTrack tracking (`--tracking`) |
 | `export` | `onnx`, `onnxslim` | ONNX export and validation (together with `detector` and one runtime extra) |
 | `onnxruntime` | `onnxruntime` (CPU build) | ONNX Runtime inference (`--backend onnx`) on the CPU, and export simplification |
+| `plots` | `matplotlib` (already installed with `detector`) | `plot_benchmarks.py` |
 | `onnxruntime-gpu` | `onnxruntime-gpu` | The same on NVIDIA GPUs (CUDA); **instead of** `onnxruntime`, never together |
 
 Windows (PowerShell):
@@ -633,6 +655,21 @@ python scripts\compare_benchmarks.py results\benchmarks\pytorch_cpu.json results
 
 The full methodology, metric definitions and the fair-comparison procedure are in [`docs/benchmarking.md`](docs/benchmarking.md); the result schema is in [`results/README.md`](results/README.md).
 
+#### Evaluation and plots
+
+```bat
+:: performance plots + summary table from benchmark results (written to results\plots\)
+python scripts\plot_benchmarks.py results\benchmarks\pytorch_cpu.json results\benchmarks\onnx_cpu.json
+
+:: how closely two detection runs on the same video agree (not accuracy)
+python scripts\compare_detections.py results\sample_detections.json results\sample_onnx.json
+
+:: accuracy - only with labelled images you provide (COCO JSON)
+python scripts\evaluate.py --annotations data\eval\annotations.json --images data\eval\images --backend onnx
+```
+
+Performance, agreement and accuracy are kept strictly apart. Detection counts and agreement between backends never stand in for accuracy, and accuracy needs ground truth, which this repository does not include. The labelled-data format, every metric's definition, and what the numbers do and do not show are in [`docs/evaluation.md`](docs/evaluation.md).
+
 #### Tests
 
 `python -m pytest` runs unit tests in which OpenCV, PyTorch, Ultralytics and ONNX are replaced by fakes where needed; they check EdgeVision's own logic (validation, device choice, argument passing, output conversion, error handling) and never download anything. They do **not** prove that the real model works. Tests that need an optional package that is not installed are reported as *skipped*, not passed. Six additional tests use the genuine YOLOv8n model: on a photo bundled with Ultralytics, on a short video built from that photo, on that video with real ByteTrack, a real ONNX export at 320×320 followed by validation (written to a temporary folder), the exported `models/yolov8n.onnx` on ONNX Runtime compared with Ultralytics running the same file, and a tiny real benchmark of both backends (checks the result files, not the speed). They are opt-in, and need the `detector` extra (plus `tracking`, `export` and `onnxruntime` for those tests) and an already-downloaded `models/yolov8n.pt` (run `detect_image.py` once):
@@ -654,16 +691,6 @@ python -m pytest -m model -v
 - With its default setting `sync: true`, Ultralytics sends anonymous usage events for runs such as prediction and export when online. To opt out: `yolo settings sync=False`.
 - Ultralytics and its pretrained weights are licensed under AGPL-3.0.
 
-### Planned interface
-
-> [!NOTE]
-> **Forthcoming.** These commands show the intended interface and do not work yet.
-
-```bash
-# Plot saved benchmark results
-python scripts/plot_results.py --input results/benchmark --output results/plots
-```
-
 CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separately once GPU execution has been verified.
 
 ## Roadmap
@@ -682,10 +709,12 @@ CUDA-enabled PyTorch wheels and GPU setup instructions will be documented separa
 - [ ] Numerical agreement between ONNX and PyTorch outputs (finite values, tolerances)
 - [x] ONNX Runtime CPU backend (`--backend onnx`)
 - [x] Benchmark runner with JSON results and a comparison command
-- [ ] Plot generation from saved results
+- [x] Plot generation from saved benchmark results, with a summary table
 - [x] CPU-only unit and integration tests
 - [ ] ONNX Runtime CUDA backend (verified execution provider)
-- [ ] Detection-quality evaluation on an annotated dataset
+- [x] Detection-quality metrics (precision, recall, F1, COCO AP/mAP) and a COCO-format ground-truth loader
+- [x] Agreement analysis between two backends' detections
+- [ ] Detection-quality evaluation on an annotated dataset (needs labelled data)
 - [ ] First recorded benchmarks (Experiments A–E in [`docs/experiment_log.md`](docs/experiment_log.md))
 
 ## Benchmark results
@@ -696,7 +725,8 @@ None recorded yet. The benchmarking tool exists, but results will be published i
 
 - No benchmark results are recorded yet. Benchmarks are batch size 1 and FP32 only, use each library's default thread count, do not measure memory, and do not control power mode or temperature.
 - PyTorch and ONNX outputs have been compared only on a few images (see [Why PyTorch and ONNX results differ slightly](#why-pytorch-and-onnx-results-differ-slightly)); there is no systematic comparison with tolerances over a dataset.
-- ONNX export and ONNX Runtime inference have been run for real on Linux only (CPU). The ONNX Runtime CUDA path has not been run: no NVIDIA GPU was available.
+- ONNX export, ONNX Runtime inference and benchmarks have been run for real on CPU only (Linux, and the project's Windows laptop). The ONNX Runtime CUDA path has not been run: no NVIDIA GPU was available.
+- No labelled dataset is included, so detection accuracy (precision, recall, mAP) has not been measured; the evaluation tools have only been tested on synthetic data.
 - The ONNX backend handles one frame at a time (batch 1), float32 models only (no FP16/INT8), and square inputs.
 - Tracking quality is not measured: there are no ground-truth track annotations, so no HOTA/MOTA/IDF1. Track IDs are only consistent within one run and are not persistent identities.
 - Only ByteTrack is supported. Detections pass through the detector's confidence threshold (0.25 by default) before tracking, so ByteTrack's low-score second pass only sees detections above that; Ultralytics' own `model.track()` lowers the threshold to 0.1 for this reason. A lower `--conf` gives the tracker more to work with, but also adds more low-confidence detections to the output.

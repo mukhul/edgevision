@@ -5,7 +5,7 @@ Local input videos and evaluation datasets. **Nothing in this directory except t
 | Path | Purpose |
 |------|---------|
 | `input/` | Prerecorded video files used as pipeline and benchmark inputs |
-| `<dataset>/` | Optional annotated detection data (COCO-format preferred) for ground-truth evaluation |
+| `eval/` (suggested) | Your labelled evaluation data for `scripts/evaluate.py`: `annotations.json` (COCO format) and `images/`. See [`docs/evaluation.md`](../docs/evaluation.md). None is included |
 
 ## Guidelines
 

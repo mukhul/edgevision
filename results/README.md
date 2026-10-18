@@ -126,4 +126,26 @@ Schema `edgevision.benchmark`, version 1. The structure is shown below; `…` st
 
 Statistics never use 0 as a placeholder: a value that cannot be computed is `null` (e.g. `stdev` with one sample) or absent with a note.
 
-`python scripts/compare_benchmarks.py A.json B.json` prints results side by side and lists every setting that differs. A future step will add plots from these files.
+`python scripts/compare_benchmarks.py A.json B.json` prints results side by side and lists every setting that differs.
+
+## Plots (`scripts/plot_benchmarks.py`)
+
+`results/plots/` (or `--output`) receives `latency.png`, `throughput.png`, `stages.png`, `latency_runs.png` and `summary.md`, a Markdown table of every plotted value with notes. Figures are written via a `.partial` file, and existing ones are only replaced with `--overwrite`. See [`docs/evaluation.md`](../docs/evaluation.md).
+
+## Detection agreement (`scripts/compare_detections.py --output`)
+
+Schema `edgevision.detection_agreement` v1: the two inputs (`a`, `b`: file, backend, model, device), `comparability_problems`, `agreement` (`frames`, `detections_a`/`_b`, `matched`, `only_a`, `only_b`, `matched_share`, `frames_with_all_detections_matched`, `matched_iou` and `matched_confidence_abs_diff` summaries, `per_class`) and `notes`. Agreement between two runs is **not** accuracy.
+
+## Accuracy evaluation (`scripts/evaluate.py`)
+
+`results/evaluation/<backend>_<date-time>.json`, schema `edgevision.evaluation` v1:
+
+| Field | Contents |
+|-------|----------|
+| `backend` | name, runtime, model (path, size, SHA-256), device, execution providers, settings |
+| `dataset` | annotation file identity, images folder, number of images and labelled objects, evaluated classes, unknown categories, warnings |
+| `metrics.overall` | `tp`, `fp`, `fn`, `ignored`, `precision`, `recall`, `f1`, `map50`, `map50_95`, `classes_with_ground_truth` |
+| `metrics.per_class` | per class name: `class_id`, `ground_truth`, `predictions`, `tp`, `fp`, `fn`, `precision`, `recall`, `f1`, `ap50`, `ap50_95` |
+| `notes` | how the confidence threshold affects the numbers, and what they do not establish |
+
+A value that cannot be computed is `null`, e.g. precision with no detections or AP for a class without labels.
