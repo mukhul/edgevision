@@ -16,8 +16,6 @@ Local input videos and evaluation datasets. **Nothing in this directory except t
 
 ## Inputs used in recorded experiments
 
-No experiments have been run yet.
-
 | Identifier | Source | License | Resolution | FPS | Frames | Notes |
 |------------|--------|---------|------------|-----|--------|-------|
-| — | — | — | — | — | — | — |
+| `input/sample.mp4` | Supplied by the repository owner (not committed) | Not recorded | 1024×576, H.264 | 30 | 113 | SHA-256 `3474870b318140d5afb951fd3b8d2dff58305f36a345523e65617b591ee36a26`, 684,763 bytes. Used in Experiments A, B, D, E and for `docs/assets/demo_tracking.gif` |

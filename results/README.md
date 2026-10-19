@@ -20,7 +20,7 @@ Schema `edgevision.video_detections`, version 1:
   "created_utc": "2026-10-17T11:00:00Z",
   "video": {"path": "data/input/sample.mp4", "width": 1024, "height": 576,
             "fps": 30.0, "frame_count_reported": 113, "fourcc": "h264"},
-  "detector": {"backend": "pytorch", "model": "models/yolov8n.pt", "device": "cpu",
+  "detector": {"backend": "pytorch", "model": "models/yolov8n.pt", "device": "cpu", "letterbox": "minimal",
                "settings": {"input_size": 640, "conf_threshold": 0.25, "iou_threshold": 0.7, "classes": null}},
   "bbox_format": "xyxy_pixels",
   "frames": [
@@ -43,7 +43,8 @@ This example is a two-frame run (`--max-frames 2`); the values illustrate the fo
 | `video` | Metadata *reported* by the file; any value may be `null` if unknown |
 | `detector.backend` | `pytorch` or `onnx` (`--backend`) |
 | `detector.device` | `cpu` or `cuda:0`: where inference actually ran |
-| `detector.execution_providers` | **ONNX backend only:** the ONNX Runtime execution providers the session actually used, in priority order, e.g. `["CPUExecutionProvider"]`. Absent for PyTorch, whose files are unchanged |
+| `detector.letterbox` | How frames were padded to the model input: `minimal` (PyTorch default, to a multiple of 32) or `square` (ONNX, or PyTorch with `--pytorch-letterbox square`). Files written before this field existed lack it; `compare_detections.py` then assumes each backend's fixed behaviour. `detect_image.py` JSON has the same field at the top level |
+| `detector.execution_providers` | **ONNX backend only:** the ONNX Runtime execution providers the session actually used, in priority order, e.g. `["CPUExecutionProvider"]`. Absent for PyTorch |
 | `detector.settings` | Exactly the settings used, so the run can be repeated |
 | `bbox_format` | `xyxy_pixels`: `[x1, y1, x2, y2]`, top-left and bottom-right corners in pixels of the original frame |
 | `frames` | One entry per processed frame, in order, with zero-based `frame_index`; frames without detections have an empty list |

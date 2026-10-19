@@ -225,14 +225,18 @@ def decode_raw_output(
         raise InferenceError(
             f"Expected output rows of 4 box values + {num_classes} class scores, got shape {output.shape}"
         )
-    preds = output.T.astype(np.float32, copy=False)  # (candidates, 4 + classes)
-    class_scores = preds[:, 4:]
-    class_ids = class_scores.argmax(axis=1)
-    scores = class_scores[np.arange(len(preds)), class_ids]
+    output = output.astype(np.float32, copy=False)
+    # Work on the (classes, candidates) rows as they come from the model: reducing over contiguous rows
+    # and picking the best class only for candidates above the threshold is several times faster than
+    # transposing first, and gives exactly the same result (argmax keeps the first class on ties).
+    class_scores = output[4:]
+    scores = class_scores.max(axis=0)
     keep = scores > settings.conf_threshold  # strictly greater, as in Ultralytics
+    class_ids = class_scores[:, keep].argmax(axis=0)
+    scores, xywh = scores[keep], output[:4, keep].T
     if settings.classes is not None:
-        keep &= np.isin(class_ids, settings.classes)
-    xywh, scores, class_ids = preds[keep, :4], scores[keep], class_ids[keep]
+        wanted = np.isin(class_ids, settings.classes)
+        xywh, scores, class_ids = xywh[wanted], scores[wanted], class_ids[wanted]
     empty = (np.zeros((0, 4), np.float32), np.zeros(0, np.float32), np.zeros(0, np.int64))
     if not len(scores):
         return empty

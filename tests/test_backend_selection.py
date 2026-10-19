@@ -170,9 +170,11 @@ def test_pytorch_stays_the_default(fake_yolo, image_file: Path, tmp_path: Path, 
     assert fake_yolo.loaded_paths == ["models/yolov8n.pt"]
     assert "PyTorch via Ultralytics, device: cpu" in capsys.readouterr().out
     doc = json.loads(out.read_text(encoding="utf-8"))
-    assert doc["backend"] == "pytorch" and "execution_providers" not in doc  # PyTorch JSON layout unchanged
-    assert list(doc) == ["edgevision_version", "backend", "image", "image_size", "model", "device", "settings",
-                         "bbox_format", "detections"]
+    assert doc["backend"] == "pytorch" and "execution_providers" not in doc
+    assert list(doc) == ["edgevision_version", "backend", "image", "image_size", "model", "device", "letterbox",
+                         "settings", "bbox_format", "detections"]
+    assert doc["letterbox"] == "minimal"  # Ultralytics' normal padding stays the default
+    assert "rect" not in fake_yolo.predict_calls[-1]
 
 
 # --- detect_video.py -------------------------------------------------------------------------
@@ -214,7 +216,33 @@ def test_video_pytorch_json_has_no_provider_field(fake_yolo, video: Path, tmp_pa
     out = tmp_path / "pt.json"
     assert load("detect_video").main([str(video), "--json", str(out), "--config", str(CONFIG), "--quiet"]) == 0
     detector = json.loads(out.read_text(encoding="utf-8"))["detector"]
-    assert list(detector) == ["backend", "model", "device", "settings"] and detector["backend"] == "pytorch"
+    assert list(detector) == ["backend", "model", "device", "letterbox", "settings"]
+    assert detector["backend"] == "pytorch" and detector["letterbox"] == "minimal"
+
+
+def test_video_pytorch_square_letterbox(fake_yolo, video: Path, tmp_path: Path) -> None:
+    # --pytorch-letterbox square makes Ultralytics pad to the full square input (rect=False), like the ONNX
+    # model, and the JSON says so, so compare_detections can tell a like-for-like comparison from one that is not.
+    out = tmp_path / "pt_square.json"
+    assert load("detect_video").main([str(video), "--pytorch-letterbox", "square", "--json", str(out),
+                                      "--config", str(CONFIG), "--quiet"]) == 0
+    assert fake_yolo.predict_calls and all(call["rect"] is False for call in fake_yolo.predict_calls)
+    assert json.loads(out.read_text(encoding="utf-8"))["detector"]["letterbox"] == "square"
+
+
+def test_onnx_json_records_square_letterbox(fake_ort, video: Path, onnx_file: Path, tmp_path: Path) -> None:
+    out = tmp_path / "onnx.json"
+    assert load("detect_video").main([str(video), "--backend", "onnx", "--model", str(onnx_file), "--json", str(out),
+                                      "--pytorch-letterbox", "square", "--config", str(CONFIG), "--quiet"]) == 0
+    detector = json.loads(out.read_text(encoding="utf-8"))["detector"]
+    assert detector["letterbox"] == "square" and detector["execution_providers"] == ["CPUExecutionProvider"]
+
+
+@pytest.mark.parametrize("script", ["detect_image", "detect_video"])
+def test_minimal_letterbox_rejected_for_onnx(script: str, tmp_path: Path) -> None:
+    result = run(script, str(tmp_path / "in.mp4"), "--backend", "onnx", "--model", str(tmp_path / "m.onnx"),
+                 "--pytorch-letterbox", "minimal", "--config", str(CONFIG))
+    assert result.returncode == 2 and "applies only to --backend pytorch" in result.stderr
 
 
 def test_video_with_onnx_input_size_mismatch(fake_ort, video: Path, onnx_file: Path, tmp_path: Path, capsys) -> None:

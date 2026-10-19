@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from edgevision.cli import fraction
-from edgevision.evaluation.agreement import DetectionsFileError, compare_files, format_comparison
+from edgevision.optional import MissingDependencyError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.iou == 0:
         parser.error("--iou must be greater than 0")
+    try:  # imported here so that --help and argument errors work without NumPy
+        from edgevision.evaluation.agreement import DetectionsFileError, compare_files, format_comparison
+    except MissingDependencyError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     if args.output is not None and args.output.exists() and not args.overwrite:
         print(f"ERROR: {args.output} already exists; pass --overwrite to replace it.", file=sys.stderr)
         return 1

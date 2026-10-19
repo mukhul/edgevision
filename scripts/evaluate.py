@@ -25,10 +25,8 @@ from typing import Any
 
 import edgevision
 from edgevision.benchmarks.report import display_path, file_identity
-from edgevision.cli import add_detector_arguments, detection_settings, detector_details, model_name
+from edgevision.cli import add_detector_arguments, detection_settings, detector_details, model_name, pytorch_letterbox
 from edgevision.config import ConfigError, load_config
-from edgevision.evaluation.annotations import AnnotationError, load_coco
-from edgevision.evaluation.detection_metrics import evaluate_detections
 from edgevision.models import DetectorError, create_detector
 from edgevision.models.factory import check_model_matches_backend
 from edgevision.optional import MissingDependencyError, import_optional
@@ -108,6 +106,12 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"result JSON (default: {DEFAULT_OUTPUT_DIR.as_posix()}/<backend>_<date-time>.json)")
     parser.add_argument("--overwrite", action="store_true", help="allow --output to replace an existing file")
     args = parser.parse_args(argv)
+    try:  # imported here so that --help and argument errors work without NumPy
+        from edgevision.evaluation.annotations import AnnotationError, load_coco
+        from edgevision.evaluation.detection_metrics import evaluate_detections
+    except MissingDependencyError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     try:
         config = load_config(args.config)
@@ -118,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = detection_settings(args, config.model)
         model = model_name(args, config.model)
         check_model_matches_backend(args.backend, model)
+        letterbox = pytorch_letterbox(args)
     except ValueError as exc:
         parser.error(str(exc))
     output = args.output or DEFAULT_OUTPUT_DIR / f"{args.backend}_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
@@ -135,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        with create_detector(args.backend, model, device=args.device, settings=settings) as detector:
+        with create_detector(args.backend, model, device=args.device, settings=settings, letterbox=letterbox) as detector:
             dataset = load_coco(args.annotations, detector.class_names)
             predictions = {}
             for index, image in enumerate(dataset.images):

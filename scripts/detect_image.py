@@ -31,6 +31,7 @@ from edgevision.cli import (
     detection_settings,
     detector_details,
     model_name,
+    pytorch_letterbox,
 )
 from edgevision.config import ConfigError, load_config
 from edgevision.models import Detection, DetectionSettings, DetectorError, create_detector
@@ -153,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     model = model_name(args, model_config)
     try:
         check_model_matches_backend(args.backend, model)
+        letterbox = pytorch_letterbox(args)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -164,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         image = read_image(args.image)
         if args.backend == "pytorch" and not Path(model).exists():
             print(f"Note: {model} not found locally; Ultralytics will try to download it.", file=sys.stderr)
-        with create_detector(args.backend, model, device=args.device, settings=settings) as detector:
+        with create_detector(args.backend, model, device=args.device, settings=settings, letterbox=letterbox) as detector:
             device, runtime, details = detector.device, detector.description, detector_details(detector)
             detections = detector.detect(image, frame_index=0)
     except (ImageError, MissingDependencyError, DetectorError) as exc:

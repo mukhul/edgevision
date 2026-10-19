@@ -89,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("input", type=Path, nargs="?", help="image or video file (default: video.input from the config)")
-    add_detector_arguments(parser)
+    add_detector_arguments(parser, pytorch_letterbox_default="square")
     parser.set_defaults(device=None)  # default from benchmark.device in the config
     parser.add_argument("--scope", choices=list(BENCHMARK_SCOPES), help="what is timed (default: benchmark.scope)")
     parser.add_argument("--warmup", type=non_negative_int, metavar="N",
@@ -102,11 +102,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="detector scope: video frames decoded into memory and used in rotation "
                         "(default: benchmark.preload_frames)")
     parser.add_argument("--tracking", action="store_true", help="pipeline scope: also time ByteTrack per frame")
-    parser.add_argument(
-        "--pytorch-letterbox", choices=["square", "minimal"],
-        help="PyTorch only: 'square' (default) pads frames to the full input size like the ONNX model, so both "
-        "backends process the same tensor; 'minimal' is Ultralytics' normal padding to a multiple of 32",
-    )
     parser.add_argument("--output", type=Path, metavar="PATH",
                         help=f"result JSON file (default: {DEFAULT_OUTPUT_DIR.as_posix()}/<backend>_<device>_<scope>_<time>.json)")
     parser.add_argument("--overwrite", action="store_true", help="allow --output to replace an existing file")

@@ -39,6 +39,7 @@ from edgevision.models.onnx_backend import (  # noqa: E402
     restore_boxes,
     select_providers,
 )
+from edgevision.models import onnx_backend  # noqa: E402
 from edgevision.optional import MissingDependencyError  # noqa: E402
 
 CPU, CUDA = "CPUExecutionProvider", "CUDAExecutionProvider"
@@ -219,6 +220,42 @@ def test_decode_raw_output_empty(make_raw_output) -> None:
 def test_decode_raw_output_rejects_wrong_class_count(make_raw_output) -> None:
     with pytest.raises(InferenceError, match="4 box values \\+ 80 class scores"):
         decode_raw_output(make_raw_output([])[0], 80, settings())
+
+
+def _transposed_reference(output, settings):
+    """The straightforward per-candidate decoding (transpose, best class, threshold, class filter)."""
+    preds = output.T.astype(np.float32)
+    ids = preds[:, 4:].argmax(axis=1)
+    scores = preds[np.arange(len(preds)), 4 + ids]
+    keep = scores > settings.conf_threshold
+    if settings.classes is not None:
+        keep &= np.isin(ids, settings.classes)
+    xywh = preds[keep, :4]
+    boxes = np.concatenate([xywh[:, :2] - xywh[:, 2:] / 2, xywh[:, :2] + xywh[:, 2:] / 2], axis=1)
+    offsets = (ids[keep].astype(np.float32) * np.float32(onnx_backend.CLASS_OFFSET))[:, None]
+    kept = onnx_backend.nms(boxes + offsets, scores[keep], settings.iou_threshold)[:onnx_backend.MAX_DETECTIONS]
+    return boxes[kept], scores[keep][kept], ids[keep][kept]
+
+
+@pytest.mark.parametrize("classes", [None, (0, 2, 5)])
+def test_decode_raw_output_equals_transposed_reference(classes) -> None:
+    # The decoder filters candidates on the model's (classes, candidates) layout for speed; the result must be
+    # bit-identical to decoding each transposed candidate row, including ties between class scores (first class
+    # wins), float16 outputs and scores exactly at the threshold (dropped).
+    rng = np.random.default_rng(7)
+    settings = DetectionSettings(conf_threshold=0.25, iou_threshold=0.7, classes=classes)
+    for dtype in (np.float32, np.float16):
+        output = np.zeros((4 + 8, 3000), dtype=np.float32)
+        output[:2] = rng.uniform(0, 640, (2, 3000))
+        output[2:4] = rng.uniform(2, 120, (2, 3000))
+        output[4:] = rng.uniform(0, 0.5, (8, 3000)).round(2)  # rounding creates many tied class scores
+        output[4:, :50] = 0.25  # exactly at the threshold
+        output = output.astype(dtype)
+        got, want = onnx_backend.decode_raw_output(output, 8, settings), _transposed_reference(output, settings)
+        assert len(want[0]) > 20
+        for g, w in zip(got, want):
+            assert g.dtype == w.dtype or g.dtype.kind == w.dtype.kind == "i"
+            np.testing.assert_array_equal(g, w)
 
 
 def test_decode_nms_output_does_not_run_nms_again() -> None:

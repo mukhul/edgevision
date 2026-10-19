@@ -24,7 +24,8 @@ detections of two runs on the same frames with the same rules. It shows how
 similar the outputs are; it says nothing about which one is correct.
 
 Values that cannot be computed (e.g. precision with no predictions) are
-``None``, never 0. Importing this module needs NumPy only.
+``None``, never 0. Importing this module needs NumPy only (``MissingDependencyError``
+with an install hint without it).
 """
 
 from __future__ import annotations
@@ -33,7 +34,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
+from edgevision.optional import import_optional
+
+np = import_optional("numpy", display_name="NumPy", extra="vision", purpose="compute detection metrics")
 
 COCO_IOU_THRESHOLDS = tuple(round(0.5 + 0.05 * i, 2) for i in range(10))  # 0.50 ... 0.95
 RECALL_POINTS = np.linspace(0.0, 1.0, 101)

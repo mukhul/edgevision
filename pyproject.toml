@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "edgevision"
 dynamic = ["version"]   # read from edgevision.__version__ (single source of truth)
-description = "Video perception pipeline and reproducible PyTorch vs ONNX Runtime inference benchmarking (early development)."
+description = "Video object detection and tracking with reproducible PyTorch vs ONNX Runtime benchmarking (CPU-validated)."
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
@@ -15,10 +15,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 
-# Only what the implemented code needs. Heavy ML packages (PyTorch, ONNX
-# Runtime, OpenCV, Ultralytics) are deliberately NOT mandatory: the
-# environment report treats them as optional and they will be added, with
-# CPU and GPU variants kept separate, in the stages that actually use them.
+# Only what the base package needs. Heavy ML packages (PyTorch, ONNX Runtime,
+# OpenCV, Ultralytics) are optional extras below, with the CPU and GPU builds
+# of ONNX Runtime kept separate; commands that need a missing extra say which
+# one to install.
 dependencies = [
     "pyyaml>=6.0.1,<7",
 ]
@@ -82,6 +82,9 @@ onnxruntime-gpu = [
 plots = [
     "matplotlib>=3.7,<4",
 ]
+
+[project.urls]
+Repository = "https://github.com/mukhul/edgevision"
 
 [tool.setuptools.dynamic]
 version = { attr = "edgevision.__version__" }

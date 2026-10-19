@@ -1,0 +1,76 @@
+name: tests
+
+# The ordinary test suite: no GPU, no network access from the tests, no model downloads.
+# PyTorch and Ultralytics are not installed here (large downloads); the tests that need them
+# use fakes or are skipped with a reason. Real-model tests are opt-in and never run in CI.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (${{ matrix.os }}, Python 3.11)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install OpenCV system library (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1
+
+      - name: Install EdgeVision with the lightweight extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,vision,onnxruntime,export,plots]"
+          python -m pip check
+
+      - name: Environment report
+        run: python -m edgevision.device
+
+      - name: Run the test suite
+        run: python -m pytest -ra
+
+  base-install:
+    name: base install (dev extra only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install EdgeVision with pytest only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Every command's --help works without the optional packages
+        run: |
+          for script in scripts/*.py; do python "$script" --help > /dev/null || exit 1; done
+
+      - name: Run the test suite (optional-package tests are skipped)
+        run: python -m pytest -ra

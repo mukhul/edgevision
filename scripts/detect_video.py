@@ -32,6 +32,7 @@ from edgevision.cli import (
     detection_settings,
     detector_details,
     model_name,
+    pytorch_letterbox,
     positive_float,
     positive_int,
 )
@@ -169,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     model = model_name(args, config.model)
     try:
         check_model_matches_backend(args.backend, model)
+        letterbox = pytorch_letterbox(args)
     except ValueError as exc:
         parser.error(str(exc))
     video = args.video if args.video is not None else config.video.input
@@ -218,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         # finished), then the input video, then the detector.
         with ExitStack() as stack:
             detector = stack.enter_context(
-                create_detector(args.backend, model, device=args.device, settings=settings)
+                create_detector(args.backend, model, device=args.device, settings=settings, letterbox=letterbox)
             )
             pipeline = stack.enter_context(
                 VideoDetectionPipeline(video, detector, max_frames=max_frames, tracker=tracker)

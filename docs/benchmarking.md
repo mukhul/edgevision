@@ -3,7 +3,7 @@
 `scripts/benchmark.py` measures how long a detection backend takes, under stated and recorded conditions, and saves every measurement as JSON. `scripts/compare_benchmarks.py` shows results side by side and lists every setting that differs between them.
 
 > [!WARNING]
-> **A benchmark result describes one machine, one model, one input and one set of settings.** It changes with the CPU or GPU, power mode, temperature, background programs, operating system, Python and library versions, model file, input size, thresholds, and the frames used. This repository contains no recorded results; nothing here claims that one backend is faster in general.
+> **A benchmark result describes one machine, one model, one input and one set of settings.** It changes with the CPU or GPU, power mode, temperature, background programs, operating system, Python and library versions, model file, input size, thresholds, and the frames used. The only recorded results (CPU, one laptop) are in [`experiment_log.md`](experiment_log.md); nothing here claims that one backend is faster in general.
 
 ## Quick start (Windows, Command Prompt, from the repository root)
 

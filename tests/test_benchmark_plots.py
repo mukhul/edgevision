@@ -107,8 +107,9 @@ def test_load_errors(tmp_path: Path) -> None:
     with pytest.raises(bp.BenchmarkFileError, match="bad.json"):
         bp.load_benchmark_files([bad])
     other = save(tmp_path, "other", {"schema": "edgevision.video_detections", "schema_version": 1})
-    with pytest.raises(bp.BenchmarkFileError, match="not an EdgeVision benchmark"):
+    with pytest.raises(bp.BenchmarkFileError, match="not an EdgeVision benchmark") as error:
         bp.load_benchmark_files([other])
+    assert str(error.value).count(str(other)) == 1  # the file is named once, not twice
     broken = result_doc()
     del broken["summary"]["init_s_per_run"]
     with pytest.raises(bp.BenchmarkFileError, match="missing field summary.init_s_per_run"):

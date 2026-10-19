@@ -179,7 +179,7 @@ def test_compare_detections(tmp_path: Path, capsys) -> None:
     assert script.main([str(a), str(b), "--output", str(tmp_path / "out" / "agreement.json")]) == 0
     out = capsys.readouterr().out
     assert "NOT an accuracy measure" in out and "Matched pairs          1" in out
-    assert "Only in A / only in B  0 / 1" in out and "pads frames only to a multiple of 32" in out
+    assert "Only in A / only in B  0 / 1" in out and "padded frames only to a multiple of 32" in out
     saved = json.loads((tmp_path / "out" / "agreement.json").read_text(encoding="utf-8"))
     assert saved["schema"] == "edgevision.detection_agreement" and saved["agreement"]["only_b"] == 1
 
@@ -206,3 +206,23 @@ def test_compare_detections_flags_different_settings(tmp_path: Path, capsys) -> 
                                                                 "iou_threshold": 0.7, "classes": None})
     assert load("compare_detections").main([str(a), str(b)]) == 0
     assert "setting input_size differs: 640 vs 320" in capsys.readouterr().out
+
+
+def test_compare_detections_padding_note(tmp_path: Path, capsys) -> None:
+    frames = [[((0, 0, 10, 10), 0.9, 0, "person")]]
+    script = load("compare_detections")
+    # Files written before the padding was recorded: PyTorch padded minimally, ONNX to a square.
+    old_pt, onnx = video_json(tmp_path / "pt.json", "pytorch", frames), video_json(tmp_path / "onnx.json", "onnx", frames)
+    assert script.main([str(old_pt), str(onnx)]) == 0
+    out = capsys.readouterr().out
+    assert "padding minimal" in out and "padding square" in out and "--pytorch-letterbox square" in out
+    # Recorded square padding on both sides: the same input tensor, so no padding note.
+    square = tmp_path / "pt_square.json"
+    doc = json.loads(old_pt.read_text(encoding="utf-8"))
+    doc["detector"]["letterbox"] = "square"
+    square.write_text(json.dumps(doc), encoding="utf-8")
+    assert script.main([str(square), str(onnx), "--output", str(tmp_path / "agree.json")]) == 0
+    out = capsys.readouterr().out
+    assert "padded frames only" not in out and out.count("padding square") == 2
+    saved = json.loads((tmp_path / "agree.json").read_text(encoding="utf-8"))
+    assert saved["a"]["letterbox"] == saved["b"]["letterbox"] == "square" and saved["notes"] == []

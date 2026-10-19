@@ -50,8 +50,8 @@ def positive_float(text: str) -> float:
     return value
 
 
-def add_detector_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add --backend, --model, --device, --conf, --iou, --imgsz and --config."""
+def add_detector_arguments(parser: argparse.ArgumentParser, *, pytorch_letterbox_default: str = "minimal") -> None:
+    """Add --backend, --model, --device, --conf, --iou, --imgsz, --pytorch-letterbox and --config."""
     parser.add_argument(
         "--backend", choices=list(BACKENDS), default=DEFAULT_BACKEND,
         help="inference backend: pytorch (Ultralytics) or onnx (ONNX Runtime with an exported model) "
@@ -70,6 +70,12 @@ def add_detector_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--iou", type=fraction, help="NMS IoU threshold 0-1 (default: from config)")
     parser.add_argument(
         "--imgsz", type=positive_int, help="model input size, multiple of 32 (default: from config)"
+    )
+    parser.add_argument(
+        "--pytorch-letterbox", choices=["minimal", "square"],
+        help="PyTorch only: 'minimal' pads frames to a multiple of 32 (Ultralytics' normal behaviour), 'square' "
+        "pads them to the full input size like the ONNX model, so both backends see the same tensor "
+        f"(default: {pytorch_letterbox_default})",
     )
     parser.add_argument(
         "--config", type=Path, default=DEFAULT_CONFIG_PATH,
@@ -96,14 +102,35 @@ def model_name(args: argparse.Namespace, model_config: ModelConfig) -> str:
     return model_config.weights.as_posix()
 
 
-def detector_details(detector: object) -> dict[str, object]:
-    """Extra, backend-specific facts to record in JSON results (empty for PyTorch).
+def pytorch_letterbox(args: argparse.Namespace, default: str = "minimal") -> str | None:
+    """The letterbox mode to pass to ``create_detector`` (``None`` for ONNX, which is always square).
 
-    For ONNX Runtime, this is the list of execution providers the session
-    actually uses, so a result file always shows whether a GPU was involved.
+    Raises ValueError for ``--pytorch-letterbox minimal`` with the ONNX backend.
     """
+    if args.backend == "onnx":
+        if args.pytorch_letterbox == "minimal":
+            raise ValueError("--pytorch-letterbox minimal applies only to --backend pytorch "
+                             "(ONNX models need a square input)")
+        return None
+    return args.pytorch_letterbox or default
+
+
+def detector_details(detector: object) -> dict[str, object]:
+    """Extra facts to record in JSON results.
+
+    ``letterbox`` says how frames were padded to the model input, which
+    explains most differences between PyTorch and ONNX outputs. For ONNX
+    Runtime, ``execution_providers`` lists the providers the session actually
+    uses, so a result file always shows whether a GPU was involved.
+    """
+    details: dict[str, object] = {}
+    letterbox = getattr(detector, "letterbox", None)
+    if isinstance(letterbox, str):
+        details["letterbox"] = letterbox
     providers = getattr(detector, "providers", None)
-    return {} if providers is None else {"execution_providers": list(providers)}
+    if providers is not None:
+        details["execution_providers"] = list(providers)
+    return details
 
 
 def describe_settings(settings: DetectionSettings) -> str:

@@ -127,8 +127,9 @@ def load_benchmark_files(paths: list[str | os.PathLike[str]]) -> list[BenchmarkR
             raise BenchmarkFileError(f"Benchmark file not found: {path}")
         try:
             doc = load_report(path)
-        except ValueError as exc:  # includes json.JSONDecodeError
-            raise BenchmarkFileError(f"{path}: {exc}") from exc
+        except ValueError as exc:  # includes json.JSONDecodeError, whose message has no file name
+            message = str(exc)
+            raise BenchmarkFileError(message if message.startswith(str(path)) else f"{path}: {message}") from exc
         problems = validate_benchmark(doc)
         if problems:
             raise BenchmarkFileError(f"{path} cannot be analysed:\n" + "\n".join(f"  - {x}" for x in problems))

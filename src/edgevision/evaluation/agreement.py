@@ -67,6 +67,15 @@ def comparison_problems(doc_a: dict[str, Any], doc_b: dict[str, Any], frames_a: 
     return problems
 
 
+def letterbox_of(doc: dict[str, Any]) -> str | None:
+    """How a run padded its frames: as recorded, else the backend's fixed behaviour in files written
+    before the padding was recorded (PyTorch 'minimal', ONNX 'square'); None if unknown."""
+    detector = doc.get("detector", {})
+    if isinstance(detector.get("letterbox"), str):
+        return detector["letterbox"]
+    return {"pytorch": "minimal", "onnx": "square"}.get(detector.get("backend"))
+
+
 def compare_files(path_a: str | os.PathLike[str], path_b: str | os.PathLike[str], iou_threshold: float = 0.5) -> dict:
     doc_a, frames_a = load_video_detections(path_a)
     doc_b, frames_b = load_video_detections(path_b)
@@ -75,14 +84,17 @@ def compare_files(path_a: str | os.PathLike[str], path_b: str | os.PathLike[str]
         raise DetectionsFileError("; ".join(problems) + ": the files do not cover the same frames")
     result = agreement(frames_a, frames_b, iou_threshold=iou_threshold)
     notes = []
-    backends = {doc_a.get("detector", {}).get("backend"), doc_b.get("detector", {}).get("backend")}
-    if backends == {"pytorch", "onnx"}:
-        notes.append("detect_video.py's PyTorch backend pads frames only to a multiple of 32 (e.g. 640x384 for "
-                     "1024x576), the ONNX model always to 640x640. The network sees slightly different images, "
-                     "which explains most differences between these two outputs.")
+    padding = {letterbox_of(doc_a), letterbox_of(doc_b)}
+    if padding == {"minimal", "square"}:
+        notes.append("One run padded frames only to a multiple of 32 (PyTorch's default, e.g. 640x384 for 1024x576), "
+                     "the other to the full square input (e.g. 640x640). The network saw slightly different images, "
+                     "which explains most differences between these two outputs. For a like-for-like comparison, "
+                     "run PyTorch with --pytorch-letterbox square.")
     return {
-        "a": {"file": Path(path_a).name, **{k: doc_a.get("detector", {}).get(k) for k in ("backend", "model", "device")}},
-        "b": {"file": Path(path_b).name, **{k: doc_b.get("detector", {}).get(k) for k in ("backend", "model", "device")}},
+        "a": {"file": Path(path_a).name, **{k: doc_a.get("detector", {}).get(k) for k in ("backend", "model", "device")},
+              "letterbox": letterbox_of(doc_a)},
+        "b": {"file": Path(path_b).name, **{k: doc_b.get("detector", {}).get(k) for k in ("backend", "model", "device")},
+              "letterbox": letterbox_of(doc_b)},
         "comparability_problems": problems,
         "agreement": result,
         "notes": notes,
@@ -98,8 +110,8 @@ def format_comparison(report: dict[str, Any]) -> str:
     iou, conf = r["matched_iou"], r["matched_confidence_abs_diff"]
     lines = [
         "Detection agreement between two runs (NOT an accuracy measure: there is no ground truth)",
-        f"  A  {a['file']}: {a['backend']} ({a['model']}, {a['device']})",
-        f"  B  {b['file']}: {b['backend']} ({b['model']}, {b['device']})",
+        f"  A  {a['file']}: {a['backend']} ({a['model']}, {a['device']}, padding {a.get('letterbox') or 'unknown'})",
+        f"  B  {b['file']}: {b['backend']} ({b['model']}, {b['device']}, padding {b.get('letterbox') or 'unknown'})",
         f"  Frames compared        {r['frames']} (match = same class and IoU >= {r['iou_threshold']})",
         f"  Detections             A {r['detections_a']}, B {r['detections_b']}",
         f"  Matched pairs          {r['matched']}  ({pct(r['matched_share'])} of all distinct detections)",
